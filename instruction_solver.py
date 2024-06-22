@@ -497,7 +497,8 @@ class InstructionDescGenerator:
         self.result += "desc["
         self.visit(op.sub_operands[0])
         self.result += "]"
-        self.visit(op.sub_operands[1])
+        if len(op.sub_operands) > 1:
+            self.visit(op.sub_operands[1])
 
     def visitConstantMemOperand(self, op):
         self.result += "cx" if op.cx else "c"
@@ -643,6 +644,7 @@ def analyze_instruction(inst, arch="SM90a"):
 
     """
     result += generator.generate(parsed_inst)
+    result += f"<p> distilled: {asm}</p>"
 
     mutation_set = InstructionMutationSet(inst, asm, mutations)
     mutation_set.analyze_second_stage()
@@ -726,7 +728,7 @@ def distill_instruction_reverse(inst, arch):
 # 00 0f e4 00 00 01 01 00
 # 0001010000e40f00
 if __name__ == "__main__":
-    distilled = bytes.fromhex("a779ffffff4800000400100800e20f01")
+    distilled = bytes.fromhex("b573000e082a00000090010800e28300")
     analyze_instruction(distilled)
     """
     distilled = distill_instruction_reverse(distilled, "SM90a")

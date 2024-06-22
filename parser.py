@@ -27,7 +27,7 @@ p_ConstMemType = re.compile(r"c\[(?P<Bank>0x\w+)\]\[(?P<Addr>[+-?\w\.]+)\]")
 # Pattern for constant memory, some instructions have a mysterious space between two square brackets...
 p_URConstMemType = re.compile(r"cx\[(?P<URBank>UR\w+)\]\[(?P<Addr>[+-?\w\.]+)\]")
 
-p_DescAddressType = re.compile(r"desc\[(?P<URIndex>UR\d+)\](?P<Addr>\[.*\])$")
+p_DescAddressType = re.compile(r"desc\[(?P<URIndex>UR\d+)\](?P<Addr>\[.*\])?$")
 
 # RImmeAddr
 p_RImmeAddr = re.compile(r"(?P<R>R\d+)\s*(?P<II>-?0x[0-9a-fA-F]+)")
@@ -151,6 +151,7 @@ class OperandType(str, Enum):
     CONSTANT_UR = "CONSTANT_UR"
     CONSTANT = "CONSTANT"
     DESC = "DESC"
+    GDESC = "GDESC"
 
 
 class Operand:
@@ -271,12 +272,13 @@ class ConstantMemOperand(Operand):
 
 
 class DescOperand(Operand):
-    def __init__(self, bank, address):
-        super().__init__([bank, address])
+    def __init__(self, bank, address=None):
+        super().__init__([bank] + ([address] if address else []))
 
     def get_operand_key(self):
         result = "desc[" + self.sub_operands[0].get_operand_key() + "]"
-        result += "[" + self.sub_operands[1].get_operand_key() + "]"
+        if len(self.sub_operands) > 1:
+            result += "[" + self.sub_operands[1].get_operand_key() + "]"
         return result
 
     def __repr__(self):
@@ -366,6 +368,7 @@ class _InstructionParser:
             raise ValueError(f"Failed to parse constant memory {op}")
         bank = self._parseIndexedToken(match.group("URBank"))
         address = self._parseAddress(match.group("Addr"))
+
         return ConstantMemOperand(bank, address)
 
     def _parseIndexedToken(self, s):
@@ -421,7 +424,9 @@ class _InstructionParser:
             raise ValueError("Invalid desc address operand: %s" % s)
 
         reg = self._parseIndexedToken(match.group("URIndex"))
-        address = self._parseAddress(match.group("Addr"))
+        address = match.group("Addr")
+        if address:
+            address = self._parseAddress(address)
         return DescOperand(reg, address)
 
     def parseOperand(self, op_full):
@@ -442,6 +447,9 @@ class _InstructionParser:
             return self._parseFloatIMM(op_full)
         elif op.startswith("desc"):
             return self._parseDescAddress(op)
+        elif op.startswith("gdesc"):
+            # TODO: We need this
+            pass
         elif op.startswith("SR_"):
             result = RegOperand("SR", op[3:])
         else:
