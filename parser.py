@@ -1,9 +1,5 @@
 """
-Requirements:
-
-We need to be able to know which sub operand changed.
-    desc[UR][RA+0xFF]
-
+Based on CuAssembler's parser.
 """
 
 from typing import Union
@@ -21,7 +17,9 @@ p_ModifierPattern = re.compile(
 
 # Match Label+Index (including translated RZ/URZ/PT)
 # SBSet is the score board set for DEPBAR, translated before parsing
-p_IndexedPattern = re.compile(r"\b(?P<RegType>R|UR|P|UP|B|SB|SBSET|SR)(?P<Index>\d+)$")
+p_IndexedPattern = re.compile(
+    r"\b(?P<RegType>R|UR|P|UP|B|SB|SBSET|SR|gsb)(?P<Index>\d+)$"
+)
 
 # Pattern for constant memory, some instructions have a mysterious space between two square brackets...
 p_ConstMemType = re.compile(r"c\[(?P<Bank>0x\w+)\]\[(?P<Addr>[+-?\w\.]+)\]")
@@ -409,7 +407,7 @@ class _InstructionParser:
         for ts in ss:
             if len(ts) == 0:
                 continue
-            if ts.startswith("0x"):
+            if ts.startswith("0x") or ts.startswith("-0x"):
                 operands.append(self._parseIntIMM(ts))
             else:
                 operand = self._parseIndexedToken(ts)

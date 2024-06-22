@@ -6,6 +6,14 @@ from typing import Union
 import time
 import parser
 
+# TODO: Clean this up
+CACHE = {}
+print("Loading cache")
+with open("disasm_cache.txt") as file:
+    for line in file:
+        asm, inst = line.split("---")
+        CACHE[bytes.fromhex(inst.strip())] = asm.strip()
+print("Cache Loaded")
 
 # DISASM = "/usr/local/cuda-12.5/bin/nvdisasm"
 DISASM = "/opt/cuda/bin/nvdisasm"
@@ -21,6 +29,9 @@ def _process_dump(dump):
 
 
 def disassemble(dump: bytes, arch: str):
+    if arch == "SM90a" and bytes(dump) in CACHE:
+        print("CACHED RESPONSE")
+        return CACHE[bytes(dump)]
     with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp:
         tmp.write(dump)
         tmp.close()
@@ -51,11 +62,30 @@ def set_bit_range2(byte_array, start_bit, end_bit, value):
             byte_array[i // 8] &= ~mask
 
 
-def disasm_parallel(array, arch):
+def disasm_parallel(array, arch, disable_cache=False):
+    if arch == "SM90a" and not disable_cache:
+        result = [None] * len(array)
+        idxes = []
+        new_array = []
+        for i, inst in enumerate(array):
+            inst = bytes(inst)
+            if inst in CACHE:
+                result[i] = CACHE[inst]
+                continue
+            idxes.append(i)
+            new_array.append(inst)
+        uncached_results = disasm_parallel(new_array, arch, disable_cache=True)
+        print("Uncached", len(uncached_results), "out of", len(array))
+        for i, asm in zip(idxes, uncached_results):
+            result[i] = asm
+        return result
+
     if len(array) > BATCH_SIZE:
         result = []
         for i in tqdm.tqdm(range(0, len(array), BATCH_SIZE)):
-            result += disasm_parallel(array[i : i + BATCH_SIZE], arch)
+            result += disasm_parallel(
+                array[i : i + BATCH_SIZE], arch, disable_cache=True
+            )
         assert len(result) == len(array)
         return result
 
@@ -85,10 +115,8 @@ def disasm_parallel(array, arch):
     return results
 
 
+"""
 def mutate_inst(inst, arch, start=0, end=16 * 8):
-    """
-    Mutate the instruction by fliping a bit.
-    """
     processes = []
     tmp_files = []
     for i in range(start, end):
@@ -116,6 +144,18 @@ def mutate_inst(inst, arch, start=0, end=16 * 8):
         tmp.__exit__(None, None, None)
 
     return results
+"""
+
+
+def mutate_inst(inst, arch, start=0, end=16 * 8):
+    idxes = []
+    insts = []
+    for i in range(start, end):
+        inst_ = bytearray(bytes(inst))
+        inst_[i // 8] = inst_[i // 8] ^ (1 << (i % 8))
+        insts.append(inst_)
+        idxes.append(i)
+    return zip(idxes, insts, disasm_parallel(insts, arch))
 
 
 def inst_disasm_range(base, bit_start, bit_end, arch):

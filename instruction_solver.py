@@ -1,51 +1,22 @@
 import re
 import json
-import subprocess
-import tempfile
 import tqdm
 from enum import Enum
 from typing import List
+from collections import Counter
 
-from disasm_utils import disassemble, _process_dump, inst_disasm_range, disasm_parallel
+from disasm_utils import (
+    disassemble,
+    inst_disasm_range,
+    disasm_parallel,
+    mutate_inst,
+    set_bit_range2,
+)
 import table_utils
 import parser
 from parser import InstructionParser
 
 DISASM = "/opt/cuda/bin/nvdisasm"
-
-
-def mutate_inst(inst, arch, start=0, end=16 * 8):
-    """
-    Mutate the instruction by fliping a bit.
-    """
-    processes = []
-    tmp_files = []
-    for i in range(start, end):
-        inst_ = bytearray(bytes(inst))
-        inst_[i // 8] = inst_[i // 8] ^ (1 << (i % 8))
-        tmp = tempfile.NamedTemporaryFile(delete_on_close=False)
-        tmp.__enter__()
-        tmp_files.append(tmp)
-        tmp.write(inst_)
-        name = tmp.name
-        tmp.close()
-
-        process = subprocess.Popen(
-            [DISASM, name, "--binary", arch],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        processes.append((i, inst_, process))
-
-    results = []
-    for i, inst_, process in processes:
-        results.append((i, inst_, _process_dump(process.stdout.read().decode("ascii"))))
-
-    for tmp in tmp_files:
-        tmp.__exit__(None, None, None)
-
-    return results
-
 
 operand_colors = [
     "#FE8386",
@@ -54,7 +25,7 @@ operand_colors = [
     "#C9F3FF",
     "#FBDA73",
     "#72fc44",
-    "#888efc",
+    "#4e56fc",
 ]
 
 
@@ -103,68 +74,179 @@ class EncodingRange:
         return self.to_json()
 
 
-def generate_encoding_table(ranges: List[EncodingRange]):
-    builder = table_utils.TableBuilder()
-    builder.tbody_start()
+class EncodingRanges:
+    def __init__(self, ranges):
+        self.ranges = ranges
 
-    def seperator():
-        builder.tr_start("smoll")
-        for i in range(64):
-            builder.push(str(i % 8), 1)
-        builder.tr_end()
+    def _count(self, type):
+        result = 0
+        for range in self.ranges:
+            result += 1 if range.type == type else 0
+        return result
 
-    seperator()
-    current_length = 0
-    builder.tr_start()
-    for erange in ranges:
-        if current_length == 8 * 8:
-            print("Inserting seperator")
+    def operand_count(self):
+        result = 0
+        for range in self.ranges:
+            if range.type == EncodingRangeType.OPERAND:
+                result = max(result, range.operand_index + 1)
+        return result
+
+    def modifier_count(self):
+        return self._count(EncodingRangeType.MODIFIER)
+
+    def _find(self, type):
+        return list(filter(lambda x: x.type == type, self.ranges))
+
+    def encode(self, sub_operands, modifiers):
+        result = bytearray(b"\0" * 16)
+        modifier_i = 0
+        for range in self.ranges:
+            value = None
+            if range.type == EncodingRangeType.CONSTANT:
+                value = range.constant
+            elif range.type == EncodingRangeType.OPERAND:
+                value = sub_operands[range.operand_index]
+            elif range.type == EncodingRangeType.MODIFIER:
+                value = modifiers[modifier_i]
+                modifier_i += 1
+            if not value:
+                continue
+            set_bit_range2(result, range.start, range.start + range.length, value)
+        return result
+
+    def enumerate_modifiers(self):
+        modifiers = self._find(EncodingRangeType.MODIFIER)
+        operand_values = [0] * self.operand_count()
+
+        analysis_result = []
+
+        for i, modifier in enumerate(modifiers):
+            insts = []
+            for modi_i in range(pow(2, modifier.length)):
+                modi_values = [0] * len(modifiers)
+                modi_values[i] = modi_i
+                insts.append(self.encode(operand_values, modi_values))
+            disasms = disasm_parallel(insts, "SM90a")
+            analysis_result.append([])
+            comp = disasms[1]
+            for i, asm in enumerate(disasms):
+                name = analyze_modifiers_enumerate(
+                    InstructionParser.parseInstruction(comp).modifiers,
+                    InstructionParser.parseInstruction(asm).modifiers,
+                )
+                analysis_result[-1].append((bin(i)[2:].zfill(modifier.length), name))
+                comp = asm
+        return analysis_result
+
+    def generate_html_table(self):
+        builder = table_utils.TableBuilder()
+        builder.tbody_start()
+
+        def seperator():
+            builder.tr_start("smoll")
+            for i in range(64):
+                builder.push(str(i % 8), 1)
             builder.tr_end()
-            seperator()
-            builder.tr_start()
 
-        bg_color = None
-        if erange.operand_index is not None:
-            bg_color = operand_colors[erange.operand_index]
-        text = erange.name
+        seperator()
+        current_length = 0
+        builder.tr_start()
+        for erange in self.ranges:
+            if current_length == 8 * 8:
+                print("Inserting seperator")
+                builder.tr_end()
+                seperator()
+                builder.tr_start()
 
-        if not text:
-            text = erange.type
-            if erange.type == "operand_modifier":
-                text = "modi"
+            bg_color = None
+            if erange.operand_index is not None:
+                bg_color = operand_colors[erange.operand_index]
+            text = erange.name
 
-        vertical = (
-            erange.type == EncodingRangeType.FLAG
-            or erange.type == EncodingRangeType.OPERAND_FLAG
-        )
+            if not text:
+                text = erange.type
+                if erange.type == "operand_modifier" or erange.type == "modifier":
+                    text = "modi"
 
-        if erange.type == EncodingRangeType.CONSTANT:
-            text = bin(erange.constant)[2:].zfill(erange.length)[::-1]
-            for c in text:
-                builder.push(c, 1, bg=bg_color, vertical=vertical)
+            vertical = (
+                erange.type == EncodingRangeType.FLAG
+                or erange.type == EncodingRangeType.OPERAND_FLAG
+            )
+
+            if erange.type == EncodingRangeType.CONSTANT:
+                text = bin(erange.constant)[2:].zfill(erange.length)[::-1]
+                for c in text:
+                    builder.push(c, 1, bg=bg_color, vertical=vertical)
+                current_length += erange.length
+                continue
+            elif erange.type == EncodingRangeType.OPERAND:
+                text += f" {erange.operand_index}"
+
+            length = erange.length
+            # Current range is split across two rows.
+            if current_length < 8 * 8 and current_length + length > 8 * 8:
+                diff = 8 * 8 - current_length
+                builder.push(text, diff, bg=bg_color, vertical=vertical)
+
+                # insert the row seperator.
+                builder.tr_end()
+                seperator()
+                builder.tr_start()
+                length -= diff
+            # Push the remainder range.
+            builder.push(text, length, bg=bg_color, vertical=vertical)
             current_length += erange.length
+        builder.tr_end()
+        builder.tbody_end()
+        builder.end()
+        return builder.result
+
+
+def analyze_modifiers_enumerate(original: List[str], mutated: List[str]):
+    original = Counter(original)
+    mutated = Counter(mutated)
+
+    difference = Counter(mutated)
+    difference.subtract(original)
+    result = ""
+    for name, count in difference.items():
+        if count == 1:
+            result += "." + name
+    return result
+
+
+def analyze_modifiers(original: List[str], mutated: List[str]):
+    """
+    Analyze a given list of modifiers and determine if the modifier bit can be a flag.
+    Can have false positives for flag detection but will be corrected by second stage.
+    """
+    original = Counter(original)
+    mutated = Counter(mutated)
+
+    difference = Counter(mutated)
+    difference.subtract(original)
+
+    flag_candidate = None
+    not_flag = False  # is it definetly not a flag.
+    effected = False  # is a modifier field effected.
+    for name, count in difference.items():
+        if count == 0:
+            # Modifier is uneffected
             continue
-        elif erange.type == EncodingRangeType.OPERAND:
-            text += f" {erange.operand_index}"
+        effected = True
+        if count <= 0:
+            not_flag = True
+            flag_candidate = None
+            continue
 
-        length = erange.length
-        # Current range is split across two rows.
-        if current_length < 8 * 8 and current_length + length > 8 * 8:
-            diff = 8 * 8 - current_length
-            builder.push(text, diff, bg=bg_color, vertical=vertical)
+        if count == 1 and not not_flag:
+            if flag_candidate is None:
+                flag_candidate = name
+            else:
+                flag_candidate = None
+                not_flag = True
 
-            # insert the row seperator.
-            builder.tr_end()
-            seperator()
-            builder.tr_start()
-            length -= diff
-        # Push the remainder range.
-        builder.push(text, length, bg=bg_color, vertical=vertical)
-        current_length += erange.length
-    builder.tr_end()
-    builder.tbody_end()
-    builder.end()
-    return builder.result
+    return (effected, flag_candidate)
 
 
 class InstructionMutationSet:
@@ -200,7 +282,7 @@ class InstructionMutationSet:
             try:
                 mutated_parsed = InstructionParser.parseInstruction(asm)
             except Exception as e:
-                print(e)
+                print(asm, e)
                 continue
             # print(mutated_parsed.get_key())
             if parsed.get_key() != mutated_parsed.get_key():
@@ -211,32 +293,36 @@ class InstructionMutationSet:
 
             if parsed.predicate != mutated_parsed.predicate:
                 self.predicate_bits.add(i_bit)
-            for i, (a, b) in enumerate(zip(mutated_operands, parsed_operands)):
-                # What about top level modifiers?
-                a_modifiers = set(a.modifiers)
-                b_modifiers = set(b.modifiers)
-                missing_operands = b_modifiers.difference(a_modifiers)
-                new_operands = a_modifiers.difference(b_modifiers)
 
-                change_sum = len(missing_operands) + len(new_operands)
-                # For a flag field change number should add up to one.
+            # Analyze operand values and operand modifiers.
+            for i, (a, b) in enumerate(zip(mutated_operands, parsed_operands)):
                 if not a.compare(b):
                     self.operand_value_bits.add(i_bit)
                     self.bit_to_operand[i_bit] = i
-                elif change_sum > 0:
-                    print("Missing", missing_operands, "new operands", new_operands)
-                    self.bit_to_operand[i_bit] = i
-                    self.operand_modifier_bits.add(i_bit)
+                else:
+                    effected, flag = analyze_modifiers(b.modifiers, a.modifiers)
+                    if effected:
+                        self.bit_to_operand[i_bit] = i
+                        self.operand_modifier_bits.add(i_bit)
+                        print(a.modifiers, b.modifiers)
+                    if flag:
+                        self.operand_modifier_bit_flag[i_bit] = flag
 
-                    if change_sum == 1:
-                        flag_set = set()
-                        flag_set.update(missing_operands)
-                        flag_set.update(new_operands)
-                        flag_name = next(iter(flag_set))
-                        self.operand_modifier_bit_flag[i_bit] = flag_name
+            # Analyze instruction modifiers.
+            effected, flag = analyze_modifiers(
+                parsed.modifiers, mutated_parsed.modifiers
+            )
+            if effected:
+                self.modifier_bits.add(i_bit)
+            if flag:
+                print("FLAG!", flag)
+                self.instruction_modifier_bit_flag[i_bit] = flag
 
-    # NOTE: This is currently broken.
     def analyze_second_stage(self):
+        """
+        Disambuguate flags from modifiers by fliping adjacent bits.
+        """
+
         def flip_bit(array, i):
             bit_offset = i % 8
             array[i // 8] |= 1 << bit_offset
@@ -263,7 +349,6 @@ class InstructionMutationSet:
             if bit not in self.instruction_modifier_bit_flag:
                 continue  # Already eleminated.
             flag_name = self.instruction_modifier_bit_flag[bit]
-            # If the flag name is not in the disassembled instruction, this is not really a flag.
             if not disasm:
                 continue
             try:
@@ -272,9 +357,10 @@ class InstructionMutationSet:
                 pass
             if not parsed:
                 continue
-            if flag_name not in parsed["InstructionTokens"]:
+            # If the flag name is not in the disassembled instruction, this is not really a flag.
+            if flag_name not in parsed.modifiers:
+                self.modifier_bits.add(adj)
                 print(disasm)
-                print("Eleminated flag", flag_name)
                 del self.instruction_modifier_bit_flag[bit]
                 if adj in self.instruction_modifier_bit_flag:
                     del self.instruction_modifier_bit_flag[adj]
@@ -361,7 +447,7 @@ class InstructionMutationSet:
 
         _push()
 
-        return result
+        return EncodingRanges(result)
 
 
 class InstructionDescGenerator:
@@ -463,7 +549,6 @@ class ISADecoder:
         if disasm is None:
             # We loose way too much here during initilization.
             disasm = disassemble(inst, self.arch)
-
         disasm = re.sub("\\?PM[0-9]*", "", disasm)
         try:
             parsed_instruction = InstructionParser.parseInstruction(disasm)
@@ -533,7 +618,8 @@ class ISADecoder:
         return discovered
 
 
-def analyze_instruction(inst, arch="SM90"):
+def analyze_instruction(inst, arch="SM90a"):
+    inst = distill_instruction(inst, arch)
     mutations = mutate_inst(inst, arch, end=14 * 8 - 2)
     asm = disassemble(inst, arch)
 
@@ -553,7 +639,6 @@ def analyze_instruction(inst, arch="SM90"):
             margin: 2px;
             border-radius: 5px;
         }
-
     </style>
 
     """
@@ -562,11 +647,28 @@ def analyze_instruction(inst, arch="SM90"):
     mutation_set = InstructionMutationSet(inst, asm, mutations)
     mutation_set.analyze_second_stage()
     ranges = mutation_set.dump_encoding_ranges()
-    print(ranges)
-    result += generate_encoding_table(ranges)
+    print(ranges.ranges)
+    modifiers = ranges.enumerate_modifiers()
+
+    result += ranges.generate_html_table()
+    for i, rows in enumerate(modifiers):
+        result += f"<p> Modifier Group {i}"
+        builder = table_utils.TableBuilder()
+        builder.tbody_start()
+
+        for row in rows:
+            builder.tr_start()
+            for cell in row:
+                builder.push(cell)
+            builder.tr_end()
+        builder.tbody_end()
+        builder.end()
+
+        result += builder.result + "</p>"
     file = open("ranges_result.html", "w")
     file.write(result)
     file.close()
+    return ranges
 
 
 def distill_instruction(inst, arch):
@@ -620,11 +722,17 @@ def distill_instruction_reverse(inst, arch):
     return distilled
 
 
+# c5790000000000000001010000e40f00
+# 00 0f e4 00 00 01 01 00
+# 0001010000e40f00
 if __name__ == "__main__":
-    distilled = bytes.fromhex("48 79 00 00 00 00 00 00 00 00 80 03 00 ea 0f 00")
+    distilled = bytes.fromhex("a779ffffff4800000400100800e20f01")
+    analyze_instruction(distilled)
+    """
     distilled = distill_instruction_reverse(distilled, "SM90a")
     # analyze_instruction(distilled)
 
     decoder = ISADecoder([], "SM90a", "SM90")
     decoder.scan_opcode(distilled)
     decoder.dump_corpus("reverse_scan.txt")
+    """
