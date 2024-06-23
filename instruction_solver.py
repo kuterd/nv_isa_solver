@@ -6,10 +6,7 @@ from typing import List
 from collections import Counter
 
 from disasm_utils import (
-    disassemble,
-    inst_disasm_range,
-    disasm_parallel,
-    mutate_inst,
+    Disassembler,
     set_bit_range2,
 )
 import table_utils
@@ -75,8 +72,9 @@ class EncodingRange:
 
 
 class EncodingRanges:
-    def __init__(self, ranges):
+    def __init__(self, ranges, disassembler):
         self.ranges = ranges
+        self.disassembler = disassembler
 
     def _count(self, type):
         result = 0
@@ -126,7 +124,7 @@ class EncodingRanges:
                 modi_values = [0] * len(modifiers)
                 modi_values[i] = modi_i
                 insts.append(self.encode(operand_values, modi_values))
-            disasms = disasm_parallel(insts, "SM90a")
+            disasms = self.disassembler.disassemble_parallel(insts)
             analysis_result.append([])
             comp = disasms[1]
             for i, asm in enumerate(disasms):
@@ -250,10 +248,11 @@ def analyze_modifiers(original: List[str], mutated: List[str]):
 
 
 class InstructionMutationSet:
-    def __init__(self, inst, disasm, mutations):
+    def __init__(self, inst, disasm, mutations, disassembler):
         self.inst = inst
         self.disasm = disasm
         self.mutations = mutations
+        self.disassembler = disassembler
 
         # TODO: Maybe combine this into one map.
         self.operand_type_bits = set()
@@ -315,7 +314,6 @@ class InstructionMutationSet:
             if effected:
                 self.modifier_bits.add(i_bit)
             if flag:
-                print("FLAG!", flag)
                 self.instruction_modifier_bit_flag[i_bit] = flag
 
     def analyze_second_stage(self):
@@ -344,7 +342,7 @@ class InstructionMutationSet:
             return
         instructions, offsets, adj_offsets = zip(*modifier_mutations)
 
-        disassembled = disasm_parallel(instructions, "SM90")
+        disassembled = self.disassembler.disassemble_parallel(instructions)
         for disasm, bit, adj in zip(disassembled, offsets, adj_offsets):
             if bit not in self.instruction_modifier_bit_flag:
                 continue  # Already eleminated.
@@ -447,7 +445,7 @@ class InstructionMutationSet:
 
         _push()
 
-        return EncodingRanges(result)
+        return EncodingRanges(result, self.disassembler)
 
 
 class InstructionDescGenerator:
@@ -532,14 +530,14 @@ class InstructionDescGenerator:
 
 
 class ISADecoder:
-    def __init__(self, corpus, arch, parserArch):
+    def __init__(self, corpus, disassembler):
         self.corpus = {}
         self.newly_discovered = set()
         self.base_instructions = set()
         self.base_map = {}
-        self.arch = arch
+        self.disassembler = disassembler
 
-        disasm = disasm_parallel(corpus, arch)
+        disasm = self.disassembler.disassemble_parallel(corpus)
 
         for inst, asm in zip(corpus, disasm):
             self._insert_inst(inst, asm)
@@ -549,7 +547,7 @@ class ISADecoder:
     def _insert_inst(self, inst, disasm=None):
         if disasm is None:
             # We loose way too much here during initilization.
-            disasm = disassemble(inst, self.arch)
+            disasm = self.disassembler.disassemble(inst)
         disasm = re.sub("\\?PM[0-9]*", "", disasm)
         try:
             parsed_instruction = InstructionParser.parseInstruction(disasm)
@@ -582,7 +580,7 @@ class ISADecoder:
 
         # Stage 1
         discovered = 0
-        instructions = inst_disasm_range(base, 0, 12, self.arch)
+        instructions = self.disassembler.inst_disasm_range(base, 0, 12)
         for i, (inst, disasm) in enumerate(instructions):
             if len(disasm) == 0:
                 continue
@@ -607,7 +605,7 @@ class ISADecoder:
             modifier_bits = []
             operand_type_bits = []
             print("Mutating", disasm)
-            result = mutate_inst(inst, self.arch)
+            result = self.disassembler.mutate_inst(inst)
 
             for i_bit, inst, asm in result:
                 if len(asm) == 0:
@@ -620,9 +618,10 @@ class ISADecoder:
 
 
 def analyze_instruction(inst, arch="SM90a"):
-    inst = distill_instruction(inst, arch)
-    mutations = mutate_inst(inst, arch, end=14 * 8 - 2)
-    asm = disassemble(inst, arch)
+    disassembler = Disassembler(arch)
+    inst = disassembler.distill_instruction(inst)
+    mutations = disassembler.mutate_inst(inst, end=14 * 8 - 2)
+    asm = disassembler.disassemble(inst)
 
     parsed_inst = InstructionParser.parseInstruction(asm)
     generator = InstructionDescGenerator()
@@ -646,7 +645,7 @@ def analyze_instruction(inst, arch="SM90a"):
     result += generator.generate(parsed_inst)
     result += f"<p> distilled: {asm}</p>"
 
-    mutation_set = InstructionMutationSet(inst, asm, mutations)
+    mutation_set = InstructionMutationSet(inst, asm, mutations, disassembler)
     mutation_set.analyze_second_stage()
     ranges = mutation_set.dump_encoding_ranges()
     print(ranges.ranges)
@@ -673,60 +672,6 @@ def analyze_instruction(inst, arch="SM90a"):
     return ranges
 
 
-def distill_instruction(inst, arch):
-    original_asm = disassemble(inst, arch)
-    original_parsed = InstructionParser.parseInstruction(original_asm)
-
-    # Make bits 0 until the instruction don't decode the same anymore.
-    distilled = bytes(inst)
-    for i in range(127, -1, -1):
-        inst_ = bytearray(bytes(distilled))
-        if (inst_[i // 8] >> (i % 8)) & 1 == 0:
-            continue
-
-        inst_[i // 8] = inst_[i // 8] & ~(1 << (i % 8))
-        distill_asm = disassemble(inst_, arch)
-        if len(distill_asm) == 0:
-            continue
-
-        distill_parsed = InstructionParser.parseInstruction(distill_asm)
-        if original_parsed.get_key() != distill_parsed.get_key():
-            continue
-
-        distilled = bytes(inst_)
-    return distilled
-
-
-def distill_instruction_reverse(inst, arch):
-    original_asm = disassemble(inst, arch)
-    original_parsed = InstructionParser.parseInstruction(original_asm)
-
-    # Make bits 0 until the instruction don't decode the same anymore.
-    distilled = bytes(inst)
-    for i in range(127, -1, -1):
-        inst_ = bytearray(bytes(distilled))
-        if (inst_[i // 8] >> (i % 8)) & 1 == 1:
-            continue
-
-        inst_[i // 8] = inst_[i // 8] | (1 << (i % 8))
-        distill_asm = disassemble(inst_, arch)
-        if len(distill_asm) == 0:
-            continue
-        try:
-            distill_parsed = InstructionParser.parseInstruction(distill_asm)
-        except Exception as e:
-            print(distill_asm, e)
-            continue
-        if original_parsed.get_key() != distill_parsed.get_key():
-            continue
-
-        distilled = bytes(inst_)
-    return distilled
-
-
-# c5790000000000000001010000e40f00
-# 00 0f e4 00 00 01 01 00
-# 0001010000e40f00
 if __name__ == "__main__":
     distilled = bytes.fromhex("b573000e082a00000090010800e28300")
     analyze_instruction(distilled)

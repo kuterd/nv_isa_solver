@@ -1,19 +1,7 @@
 import subprocess
 import tempfile
 import tqdm
-from enum import Enum
-from typing import Union
-import time
-import parser
-
-# TODO: Clean this up
-CACHE = {}
-print("Loading cache")
-with open("disasm_cache.txt") as file:
-    for line in file:
-        asm, inst = line.split("---")
-        CACHE[bytes.fromhex(inst.strip())] = asm.strip()
-print("Cache Loaded")
+from parser import InstructionParser
 
 # DISASM = "/usr/local/cuda-12.5/bin/nvdisasm"
 DISASM = "/opt/cuda/bin/nvdisasm"
@@ -28,17 +16,137 @@ def _process_dump(dump):
     return "\n".join(result).strip()
 
 
-def disassemble(dump: bytes, arch: str):
-    if arch == "SM90a" and bytes(dump) in CACHE:
-        print("CACHED RESPONSE")
-        return CACHE[bytes(dump)]
-    with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp:
-        tmp.write(dump)
-        tmp.close()
-        result = subprocess.run(
-            [DISASM, tmp.name, "--binary", arch], capture_output=True
-        )
-    return _process_dump(result.stdout.decode("ascii"))
+class Disassembler:
+    def __init__(self, arch):
+        self.cache = {}
+        self.arch = arch
+
+    def load_cache(self, filename):
+        with open(filename) as file:
+            for line in file:
+                asm, inst = line.split("---")
+                self.cache[bytes.fromhex(inst.strip())] = asm.strip()
+
+    def dump_cache(self, filename):
+        with open(filename, "w") as file:
+            for inst, disasm in self.cache.items():
+                file.write(disasm + " --- " + inst.hex() + "\n")
+
+    def disassemble(self, inst):
+        inst = bytes(inst)
+        if inst in self.cache:
+            return self.cache[inst]
+
+        with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp:
+            tmp.write(inst)
+            tmp.close()
+            result = subprocess.run(
+                [DISASM, tmp.name, "--binary", self.arch], capture_output=True
+            )
+        result = _process_dump(result.stdout.decode("ascii"))
+        self.cache[inst] = result
+        return result
+
+    def disassemble_parallel(self, array, disable_cache=False):
+        if not disable_cache:
+            result = [None] * len(array)
+            idxes = []
+            new_array = []
+            for i, inst in enumerate(array):
+                inst = bytes(inst)
+                if inst in self.cache:
+                    result[i] = self.cache[inst]
+                    continue
+                idxes.append(i)
+                new_array.append(inst)
+            uncached_results = self.disassemble_parallel(new_array, disable_cache=True)
+            # print("Uncached", len(uncached_results), "out of", len(array))
+            for i, asm in zip(idxes, uncached_results):
+                result[i] = asm
+            return result
+
+        if len(array) > BATCH_SIZE:
+            result = []
+            for i in tqdm.tqdm(range(0, len(array), BATCH_SIZE)):
+                result += self.disassemble_parallel(
+                    array[i : i + BATCH_SIZE], disable_cache=True
+                )
+            assert len(result) == len(array)
+            return result
+
+        processes = []
+        tmp_files = []
+        for i, inst in enumerate(array):
+            tmp = tempfile.NamedTemporaryFile(delete_on_close=False)
+            tmp.__enter__()
+            tmp_files.append(tmp)
+            tmp.write(inst)
+            name = tmp.name
+            tmp.close()
+
+            process = subprocess.Popen(
+                [DISASM, name, "--binary", self.arch],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            processes.append(process)
+
+        results = []
+        for process in processes:
+            results.append(_process_dump(process.stdout.read().decode("ascii")))
+
+        for tmp in tmp_files:
+            tmp.__exit__(None, None, None)
+
+        # Cache the instructions!
+        for inst, disasm in zip(array, results):
+            self.cache[inst] = disasm
+
+        return results
+
+    def distill_instruction(self, inst):
+        original_asm = self.disassemble(inst)
+        original_parsed = InstructionParser.parseInstruction(original_asm)
+
+        # Make bits 0 until the instruction don't decode the same anymore.
+        distilled = bytes(inst)
+        for i in range(127, -1, -1):
+            inst_ = bytearray(bytes(distilled))
+            if (inst_[i // 8] >> (i % 8)) & 1 == 0:
+                continue
+
+            inst_[i // 8] = inst_[i // 8] & ~(1 << (i % 8))
+            distill_asm = self.disassemble(inst_)
+            if len(distill_asm) == 0:
+                continue
+
+            distill_parsed = InstructionParser.parseInstruction(distill_asm)
+            if original_parsed.get_key() != distill_parsed.get_key():
+                continue
+
+            distilled = bytes(inst_)
+        return distilled
+
+    def mutate_inst(self, inst, start=0, end=16 * 8):
+        idxes = []
+        insts = []
+        for i in range(start, end):
+            inst_ = bytearray(bytes(inst))
+            inst_[i // 8] = inst_[i // 8] ^ (1 << (i % 8))
+            insts.append(inst_)
+            idxes.append(i)
+        return zip(idxes, insts, self.disassemble_parallel(insts))
+
+    def inst_disasm_range(self, base, bit_start, bit_end):
+        """
+        Brute force a bit range.
+        """
+        instructions = []
+        for i in range(pow(2, bit_end - bit_start + 1)):
+            inst_bytes = bytearray(bytes(base))
+            set_bit_range2(inst_bytes, bit_start, bit_end, i)
+            instructions.append(inst_bytes)
+        return zip(instructions, self.disassemble_parallel(instructions))
 
 
 def set_bit_range(byte_array, start_bit, end_bit, value):
@@ -52,134 +160,12 @@ def set_bit_range(byte_array, start_bit, end_bit, value):
 
 
 def set_bit_range2(byte_array, start_bit, end_bit, value):
-    length = end_bit - start_bit - 1
     for i in range(start_bit, end_bit):
-        # mask = 1 << (7 - i % 8)
         mask = 1 << (i % 8)
         if value & (1 << (i - start_bit)):
             byte_array[i // 8] |= mask
         else:
             byte_array[i // 8] &= ~mask
-
-
-def disasm_parallel(array, arch, disable_cache=False):
-    if arch == "SM90a" and not disable_cache:
-        result = [None] * len(array)
-        idxes = []
-        new_array = []
-        for i, inst in enumerate(array):
-            inst = bytes(inst)
-            if inst in CACHE:
-                result[i] = CACHE[inst]
-                continue
-            idxes.append(i)
-            new_array.append(inst)
-        uncached_results = disasm_parallel(new_array, arch, disable_cache=True)
-        print("Uncached", len(uncached_results), "out of", len(array))
-        for i, asm in zip(idxes, uncached_results):
-            result[i] = asm
-        return result
-
-    if len(array) > BATCH_SIZE:
-        result = []
-        for i in tqdm.tqdm(range(0, len(array), BATCH_SIZE)):
-            result += disasm_parallel(
-                array[i : i + BATCH_SIZE], arch, disable_cache=True
-            )
-        assert len(result) == len(array)
-        return result
-
-    processes = []
-    tmp_files = []
-    for i, inst in enumerate(array):
-        tmp = tempfile.NamedTemporaryFile(delete_on_close=False)
-        tmp.__enter__()
-        tmp_files.append(tmp)
-        tmp.write(inst)
-        name = tmp.name
-        tmp.close()
-
-        process = subprocess.Popen(
-            [DISASM, name, "--binary", arch],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        processes.append(process)
-
-    results = []
-    for process in processes:
-        results.append(_process_dump(process.stdout.read().decode("ascii")))
-
-    for tmp in tmp_files:
-        tmp.__exit__(None, None, None)
-    return results
-
-
-"""
-def mutate_inst(inst, arch, start=0, end=16 * 8):
-    processes = []
-    tmp_files = []
-    for i in range(start, end):
-        inst_ = bytearray(bytes(inst))
-        inst_[i // 8] = inst_[i // 8] ^ (1 << (7 - i % 8))
-        tmp = tempfile.NamedTemporaryFile(delete_on_close=False)
-        tmp.__enter__()
-        tmp_files.append(tmp)
-        tmp.write(inst_)
-        name = tmp.name
-        tmp.close()
-
-        process = subprocess.Popen(
-            [DISASM, name, "--binary", arch],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        processes.append((i, inst_, process))
-
-    results = []
-    for i, inst_, process in processes:
-        results.append((i, inst_, _process_dump(process.stdout.read().decode("ascii"))))
-
-    for tmp in tmp_files:
-        tmp.__exit__(None, None, None)
-
-    return results
-"""
-
-
-def mutate_inst(inst, arch, start=0, end=16 * 8):
-    idxes = []
-    insts = []
-    for i in range(start, end):
-        inst_ = bytearray(bytes(inst))
-        inst_[i // 8] = inst_[i // 8] ^ (1 << (i % 8))
-        insts.append(inst_)
-        idxes.append(i)
-    return zip(idxes, insts, disasm_parallel(insts, arch))
-
-
-def inst_disasm_range(base, bit_start, bit_end, arch):
-    """
-    Brute force a bit range.
-    """
-    instructions = []
-    for i in range(pow(2, bit_end - bit_start + 1)):
-        inst_bytes = bytearray(bytes(base))
-        set_bit_range2(inst_bytes, bit_start, bit_end, i)
-        instructions.append(inst_bytes)
-    return zip(instructions, disasm_parallel(instructions, arch))
-
-
-"""
-def dump_bitrange(inst):
-    for i in range(8*16):
-        bit_index = 7 - i % 8
-        byte_index = i // 8
-        print((inst[byte_index] & (1 << (bit_index))) >> bit_index, end="")
-        if i == 64 - 1:
-            print("")
-    print("\n")
-"""
 
 
 def dump_bitrange(inst):
