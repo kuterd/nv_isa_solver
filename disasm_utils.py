@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import tqdm
 from parser import InstructionParser
+import os
 
 # DISASM = "/usr/local/cuda-12.5/bin/nvdisasm"
 DISASM = "/opt/cuda/bin/nvdisasm"
@@ -37,12 +38,13 @@ class Disassembler:
         if inst in self.cache:
             return self.cache[inst]
 
-        with tempfile.NamedTemporaryFile(delete_on_close=False) as tmp:
-            tmp.write(inst)
-            tmp.close()
-            result = subprocess.run(
-                [DISASM, tmp.name, "--binary", self.arch], capture_output=True
-            )
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+        tmp.write(inst)
+        tmp.close()
+        result = subprocess.run(
+            [DISASM, tmp.name, "--binary", self.arch], capture_output=True
+        )
+        os.remove(tmp.name)
         result = _process_dump(result.stdout.decode("ascii"))
         self.cache[inst] = result
         return result
@@ -77,8 +79,7 @@ class Disassembler:
         processes = []
         tmp_files = []
         for i, inst in enumerate(array):
-            tmp = tempfile.NamedTemporaryFile(delete_on_close=False)
-            tmp.__enter__()
+            tmp = tempfile.NamedTemporaryFile(delete=False)
             tmp_files.append(tmp)
             tmp.write(inst)
             name = tmp.name
@@ -96,7 +97,7 @@ class Disassembler:
             results.append(_process_dump(process.stdout.read().decode("ascii")))
 
         for tmp in tmp_files:
-            tmp.__exit__(None, None, None)
+            os.remove(tmp.name)
 
         # Cache the instructions!
         for inst, disasm in zip(array, results):
