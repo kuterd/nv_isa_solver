@@ -3,10 +3,9 @@ import tempfile
 import tqdm
 from parser import InstructionParser
 import os
+import multiprocessing
 
 # DISASM = "/usr/local/cuda-12.5/bin/nvdisasm"
-DISASM = "/opt/cuda/bin/nvdisasm"
-BATCH_SIZE = 32
 
 
 def _process_dump(dump):
@@ -18,9 +17,13 @@ def _process_dump(dump):
 
 
 class Disassembler:
-    def __init__(self, arch):
+    def __init__(self, arch, nvdisasm="nvdisasm", batch_size=None):
         self.cache = {}
         self.arch = arch
+        self.nvdisasm = nvdisasm
+        if batch_size == None:
+            batch_size = multiprocessing.cpu_count()
+        self.batch_size = batch_size
 
     def load_cache(self, filename):
         with open(filename) as file:
@@ -42,7 +45,7 @@ class Disassembler:
         tmp.write(inst)
         tmp.close()
         result = subprocess.run(
-            [DISASM, tmp.name, "--binary", self.arch], capture_output=True
+            [self.nvdisasm, tmp.name, "--binary", self.arch], capture_output=True
         )
         os.remove(tmp.name)
         result = _process_dump(result.stdout.decode("ascii"))
@@ -67,11 +70,11 @@ class Disassembler:
                 result[i] = asm
             return result
 
-        if len(array) > BATCH_SIZE:
+        if len(array) > self.batch_size:
             result = []
-            for i in tqdm.tqdm(range(0, len(array), BATCH_SIZE)):
+            for i in tqdm.tqdm(range(0, len(array), self.batch_size)):
                 result += self.disassemble_parallel(
-                    array[i : i + BATCH_SIZE], disable_cache=True
+                    array[i : i + self.batch_size], disable_cache=True
                 )
             assert len(result) == len(array)
             return result
@@ -86,7 +89,7 @@ class Disassembler:
             tmp.close()
 
             process = subprocess.Popen(
-                [DISASM, name, "--binary", self.arch],
+                [self.nvdisasm, name, "--binary", self.arch],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -101,7 +104,7 @@ class Disassembler:
 
         # Cache the instructions!
         for inst, disasm in zip(array, results):
-            self.cache[inst] = disasm
+            self.cache[bytes(inst)] = disasm
 
         return results
 
