@@ -129,10 +129,12 @@ class EncodingRanges:
             analysis_result.append([])
             comp = disasms[1]
             for i, asm in enumerate(disasms):
-                name = analyze_modifiers_enumerate(
-                    InstructionParser.parseInstruction(comp).modifiers,
-                    InstructionParser.parseInstruction(asm).modifiers,
-                )
+                try:
+                    comp_modis = InstructionParser.parseInstruction(comp).modifiers
+                    asm_modis = InstructionParser.parseInstruction(asm).modifiers
+                except Exception:
+                    continue
+                name = analyze_modifiers_enumerate(comp_modis, asm_modis)
                 analysis_result[-1].append((bin(i)[2:].zfill(modifier.length), name))
                 comp = asm
         return analysis_result
@@ -317,7 +319,7 @@ class InstructionMutationSet:
             if flag:
                 self.instruction_modifier_bit_flag[i_bit] = flag
 
-    def dump_encoding_ranges(self):
+    def compute_encoding_ranges(self):
         """
         Construct encoding ranges from the mutation set.
 
@@ -405,18 +407,19 @@ class InstructionMutationSet:
         return EncodingRanges(result, self.disassembler)
 
 
+def set_bit(array, i):
+    bit_offset = i % 8
+    # NOTE: Should this flip the bit instead?
+    array[i // 8] ^= 1 << bit_offset
+
+
 def analysis_disambiguate_flags(
     disassembler: Disassembler, mset: InstructionMutationSet
-):
+) -> bool:
     """
     Analysis pass to disambiguate flags from modifiers by fliping adjacent bits.
+    TODO: Operand modifier/flag disambiguation
     """
-
-    def set_bit(array, i):
-        bit_offset = i % 8
-        # NOTE: Should this flip the bit instead?
-        array[i // 8] |= 1 << bit_offset
-
     modifier_mutations = []
 
     for bit in mset.instruction_modifier_bit_flag:
@@ -435,6 +438,7 @@ def analysis_disambiguate_flags(
     instructions, offsets, adj_offsets = zip(*modifier_mutations)
 
     disassembled = mset.disassembler.disassemble_parallel(instructions)
+    changed = False
     for disasm, bit, adj in zip(disassembled, offsets, adj_offsets):
         if bit not in mset.instruction_modifier_bit_flag:
             continue  # Already eleminated.
@@ -449,11 +453,107 @@ def analysis_disambiguate_flags(
             continue
         # If the flag name is not in the disassembled instruction, this is not really a flag.
         if flag_name not in parsed.modifiers:
+            changed = True
             mset.modifier_bits.add(adj)
-            print(disasm)
             del mset.instruction_modifier_bit_flag[bit]
             if adj in mset.instruction_modifier_bit_flag:
                 del mset.instruction_modifier_bit_flag[adj]
+
+    return changed
+
+
+def analysis_extend_modifiers(
+    disassembler: Disassembler, mset: InstructionMutationSet
+) -> bool:
+    """
+    analysis pass to try to extend modifier fields.
+    """
+    ranges = mset.compute_encoding_ranges()
+    modifier_ranges = ranges._find(EncodingRangeType.MODIFIER)
+    changed = False
+
+    def analyse_adj(modi_bit, adj):
+        nonlocal changed
+
+        array = bytearray(mset.inst)
+        set_bit(array, modi_bit)
+        original_asm = disassembler.disassemble(array)
+        if len(original_asm) == 0:
+            return
+        original_parsed = InstructionParser.parseInstruction(original_asm)
+
+        set_bit(array, adj)
+        modi_asm = disassembler.disassemble(array)
+        if len(modi_asm) == 0:
+            return
+        try:
+            modi_parsed = InstructionParser.parseInstruction(modi_asm)
+        except Exception:
+            # TODO: Ideally this wouldn't happen.
+            return
+
+        if modi_parsed.get_key() != original_parsed.get_key():
+            return
+        # Check if there is any difference in modifiers.
+        if modi_parsed.modifiers != original_parsed.modifiers:
+            # Adjacent bit is a part of the modifier
+            mset.modifier_bits.add(adj)
+            if adj in mset.instruction_modifier_bit_flag:
+                del mset.instruction_modifier_bit_flag[adj]
+            changed = True
+
+    for rng in modifier_ranges:
+        # 1 0 0 0 1 usually works better.
+        analyse_adj(rng.start, rng.start - 1)
+        analyse_adj(rng.start + rng.length // 2, rng.start - 1)
+        analyse_adj(rng.start + rng.length - 1, rng.start - 1)
+        analyse_adj(rng.start, rng.start + rng.length)
+        analyse_adj(rng.start + rng.length - 1, rng.start + rng.length)
+        analyse_adj(rng.start + rng.length // 2, rng.start + rng.length)
+    return changed
+
+
+def analysis_modifier_coalescing(
+    disassembler: Disassembler, mset: InstructionMutationSet
+) -> bool:
+    changed = False
+    ranges = mset.compute_encoding_ranges()
+
+    for i, rng in enumerate(ranges.ranges[1:]):
+        if rng.length > 1:
+            continue
+        if (
+            ranges.ranges[i].type != EncodingRangeType.MODIFIER
+            or rng.type != EncodingRangeType.CONSTANT
+        ):
+            continue
+        if (
+            len(ranges.ranges) <= i + 2
+            or ranges.ranges[i + 2].type != EncodingRangeType.MODIFIER
+        ):
+            continue
+        for i in range(rng.start, rng.start + rng.length):
+            changed = True
+            mset.modifier_bits.add(i)
+    return changed
+
+
+INSTRUCTION_DESC_HEADER = """
+    <style>
+        .instruction-desc {
+            font-weight: bold;
+            padding: 5px;
+            margin-top: 15px;
+            margin-bottom: 15px;
+        }
+
+        .flat-operand-section {
+            padding: 2px;
+            margin: 2px;
+            border-radius: 5px;
+        }
+    </style>
+"""
 
 
 class InstructionDescGenerator:
@@ -492,6 +592,8 @@ class InstructionDescGenerator:
             self.visitAddressOperand(op)
         elif isinstance(op, parser.RegOperand):
             self.visitRegOperand(op)
+        elif isinstance(op, parser.AttributeOperand):
+            self.visitAttributeOperand(op)
 
     def begin_section(self, op):
         self.result += f"<span class='flat-operand-section' style='background-color:{operand_colors[op.flat_operand_index]}'>"
@@ -499,7 +601,12 @@ class InstructionDescGenerator:
     def end_section(self):
         self.result += "</span>"
 
+    def visitAttributeOperand(self, op):
+        self.result += "a"
+        self.visit(op.sub_operands[0])
+
     def visitDescOperand(self, op):
+        self.result += "g" if op.g else ""
         self.result += "desc["
         self.visit(op.sub_operands[0])
         self.result += "]"
@@ -625,22 +732,14 @@ class ISADecoder:
         return discovered
 
 
-INSTRUCTION_DESC_HEADER = """
-    <style>
-        .instruction-desc {
-            font-weight: bold;
-            padding: 5px;
-            margin-top: 15px;
-            margin-bottom: 15px;
-        }
-
-        .flat-operand-section {
-            padding: 2px;
-            margin: 2px;
-            border-radius: 5px;
-        }
-    </style>
-    """
+def analysis_run_fixedpoint(
+    disassembler: Disassembler, mset: InstructionMutationSet, fn
+):
+    change = True
+    while change:
+        change = fn(disassembler, mset)
+        if change:
+            print("analysis changed modifiers")
 
 
 def analysis_pipeline(inst, disassembler):
@@ -657,11 +756,14 @@ def analysis_pipeline(inst, disassembler):
     mutation_set = InstructionMutationSet(inst, asm, mutations, disassembler)
 
     analysis_disambiguate_flags(disassembler, mutation_set)
+    # analysis_run_fixedpoint(disassembler, mutation_set, analysis_extend_modifiers)
+    # analysis_modifier_coalescing(disassembler, mutation_set)
 
-    ranges = mutation_set.dump_encoding_ranges()
+    ranges = mutation_set.compute_encoding_ranges()
+    html_result += ranges.generate_html_table()
+    """
     modifiers = ranges.enumerate_modifiers()
 
-    html_result += ranges.generate_html_table()
     for i, rows in enumerate(modifiers):
         html_result += f"<p> Modifier Group {i}"
         builder = table_utils.TableBuilder()
@@ -676,6 +778,7 @@ def analysis_pipeline(inst, disassembler):
         builder.end()
 
         html_result += builder.result + "</p>"
+    """
     return html_result, ranges
 
 
@@ -689,7 +792,7 @@ if __name__ == "__main__":
 
     result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
 
-    for key, inst in instructions[:50]:
+    for key, inst in instructions[:200]:
         print("Analyzing", key)
         html, ranges = analysis_pipeline(inst, disassembler)
         result += html
@@ -697,6 +800,7 @@ if __name__ == "__main__":
     with open("isa.html", "w") as file:
         file.write(result)
 
+    disassembler.dump_cache("disasm_cache.txt")
     """
     distilled = distill_instruction_reverse(distilled, "SM90a")
     # analyze_instruction(distilled)

@@ -1,12 +1,15 @@
 """
 Based on CuAssembler's parser.
+
+TODO:
+    missing a[...], o[...], gdesc[...], Rpc
+
 """
 
 from typing import Union
 import re
 from enum import Enum
 
-# TODO: Add the ?PM1 support.
 p_InsPattern = re.compile(r"(?P<Pred>@!?U?P\w\s+)?\s*(?P<Op>[\w\.\?]+)(?P<Operands>.*)")
 
 # Pattern for striping modifiers from an operand
@@ -24,10 +27,13 @@ p_IndexedPattern = re.compile(
 # Pattern for constant memory, some instructions have a mysterious space between two square brackets...
 p_ConstMemType = re.compile(r"c\[(?P<Bank>0x\w+)\]\[(?P<Addr>[+-?\w\.]+)\]")
 
+# Attributes
+p_AttributeType = re.compile(r"a\[(?P<Addr>[+-?\w\.]+)\]")
+
 # Pattern for constant memory, some instructions have a mysterious space between two square brackets...
 p_URConstMemType = re.compile(r"cx\[(?P<URBank>UR\w+)\]\[(?P<Addr>[+-?\w\.]+)\]")
 
-p_DescAddressType = re.compile(r"desc\[(?P<URIndex>UR\d+)\](?P<Addr>\[.*\])?$")
+p_DescAddressType = re.compile(r"g?desc\[(?P<URIndex>UR\d+)\](?P<Addr>\[.*\])?$")
 
 # RImmeAddr
 p_RImmeAddr = re.compile(r"(?P<R>R\d+)\s*(?P<II>-?0x[0-9a-fA-F]+)")
@@ -207,6 +213,17 @@ class RegOperand(Operand):
         return self.ident == other.ident
 
 
+class AttributeOperand(Operand):
+    def __init__(self, address):
+        super().__init__([address])
+
+    def __repr__(self):
+        return "a" + repr(self.sub_operands[0])
+
+    def get_operand_key(self):
+        return f"a[{self.sub_operands[0].get_operand_key()}]"
+
+
 class AddressOperand(Operand):
     def __init__(self, operands):
         super().__init__(operands)
@@ -272,17 +289,22 @@ class ConstantMemOperand(Operand):
 
 
 class DescOperand(Operand):
-    def __init__(self, bank, address=None):
+    def __init__(self, bank, address=None, g=False):
         super().__init__([bank] + ([address] if address else []))
+        self.g = g
 
     def get_operand_key(self):
-        result = "desc[" + self.sub_operands[0].get_operand_key() + "]"
+        result = "g" if self.g else ""
+        result += "desc[" + self.sub_operands[0].get_operand_key() + "]"
         if len(self.sub_operands) > 1:
             result += "[" + self.sub_operands[1].get_operand_key() + "]"
         return result
 
     def __repr__(self):
-        return f"desc[{repr(self.sub_operands[0])}]{repr(self.sub_operands[1])}"
+        prefix = "g" if self.g else ""
+        return (
+            prefix + f"desc[{repr(self.sub_operands[0])}]{repr(self.sub_operands[1])}"
+        )
 
 
 class Instruction:
@@ -371,6 +393,13 @@ class _InstructionParser:
 
         return ConstantMemOperand(bank, address)
 
+    def _parseAttribute(self, op):
+        match = p_AttributeType.match(op)
+        if match is None:
+            raise ValueError(f"Failed to parse attribute {op}")
+        address = self._parseAddress(match.group("Addr"))
+        return AttributeOperand(address)
+
     def _parseIndexedToken(self, s):
         """Parse index token such as R0, UR1, P2, UP3, B4, SB5, ...
 
@@ -427,7 +456,7 @@ class _InstructionParser:
         address = match.group("Addr")
         if address:
             address = self._parseAddress(address)
-        return DescOperand(reg, address)
+        return DescOperand(reg, address, g=False)
 
     def parseOperand(self, op_full):
         op, modi = self.parseOperandAtom(op_full)
@@ -440,18 +469,31 @@ class _InstructionParser:
             result = self._parseConstMemory(op)
         elif op.startswith("cx["):
             return self._parseURConstMemory(op)
+        elif op.startswith("a["):
+            return self._parseAttribute(op)
         elif op.startswith("0x"):
             result = self._parseIntIMM(op)
         elif p_FIType.match(op_full):
             # float and friends
             return self._parseFloatIMM(op_full)
-        elif op.startswith("desc"):
+        elif op.startswith("desc") or op.startswith("gdesc"):
             return self._parseDescAddress(op)
-        elif op.startswith("gdesc"):
-            # TODO: We need this
-            pass
+        elif op.startswith("COMP_STATUS"):
+            result = RegOperand("COMP_STATUS", 0)
+        elif op.startswith("TEX_"):
+            result = RegOperand("TEX", op[4:])
         elif op.startswith("SR_"):
             result = RegOperand("SR", op[3:])
+        elif op == "Rpc":
+            result = RegOperand("PC", None)
+        elif op == "PR":
+            result = RegOperand("P", "R")
+        elif op.startswith("INVALID"):
+            result = RegOperand("SR", op)
+        elif op in ["1D", "2D", "3D", "4D"]:
+            result = RegOperand("D", op[0])
+        elif op.startswith("ARRAY_"):
+            result = RegOperand("ARRAY_D", op[6:])
         else:
             # Weird special register?
             pass
@@ -460,6 +502,12 @@ class _InstructionParser:
         return result
 
     def parseInstruction(self, instruction):
+        if instruction[-1] == ";":
+            instruction = instruction[:-1]
+
+        if "?PM" in instruction:
+            instruction = instruction[:-4]
+
         instruction = self._constTr(instruction)
         match = p_InsPattern.match(instruction)
         if not match:
