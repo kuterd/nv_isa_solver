@@ -317,54 +317,11 @@ class InstructionMutationSet:
             if flag:
                 self.instruction_modifier_bit_flag[i_bit] = flag
 
-    def analyze_second_stage(self):
-        """
-        Disambuguate flags from modifiers by fliping adjacent bits.
-        """
-
-        def flip_bit(array, i):
-            bit_offset = i % 8
-            array[i // 8] |= 1 << bit_offset
-
-        modifier_mutations = []
-
-        for bit in self.instruction_modifier_bit_flag:
-            inst_ = bytearray(self.inst)
-            flip_bit(inst_, bit)
-            flip_bit(inst_, bit + 1)
-            modifier_mutations.append((inst_, bit, bit + 1))
-
-            if bit - 1 not in self.instruction_modifier_bit_flag:
-                inst_ = bytearray(self.inst)
-                flip_bit(inst_, bit)
-                flip_bit(inst_, bit - 1)
-                modifier_mutations.append((inst_, bit, bit - 1))
-        if len(modifier_mutations) == 0:
-            return
-        instructions, offsets, adj_offsets = zip(*modifier_mutations)
-
-        disassembled = self.disassembler.disassemble_parallel(instructions)
-        for disasm, bit, adj in zip(disassembled, offsets, adj_offsets):
-            if bit not in self.instruction_modifier_bit_flag:
-                continue  # Already eleminated.
-            flag_name = self.instruction_modifier_bit_flag[bit]
-            if not disasm:
-                continue
-            try:
-                parsed = InstructionParser.parseInstruction(disasm)
-            except Exception:
-                pass
-            if not parsed:
-                continue
-            # If the flag name is not in the disassembled instruction, this is not really a flag.
-            if flag_name not in parsed.modifiers:
-                self.modifier_bits.add(adj)
-                print(disasm)
-                del self.instruction_modifier_bit_flag[bit]
-                if adj in self.instruction_modifier_bit_flag:
-                    del self.instruction_modifier_bit_flag[adj]
-
     def dump_encoding_ranges(self):
+        """
+        Construct encoding ranges from the mutation set.
+
+        """
         result = []
         current_range = None
 
@@ -400,7 +357,6 @@ class InstructionMutationSet:
                 )
             elif i in self.operand_modifier_bits:
                 operand_index = self.bit_to_operand[i]
-                new_type = EncodingRangeType.OPERAND_MODIFIER
                 # is this a flag
                 if i in self.operand_modifier_bit_flag:
                     # Flush the current cell no matter what.
@@ -447,6 +403,57 @@ class InstructionMutationSet:
         _push()
 
         return EncodingRanges(result, self.disassembler)
+
+
+def analysis_disambiguate_flags(
+    disassembler: Disassembler, mset: InstructionMutationSet
+):
+    """
+    Analysis pass to disambiguate flags from modifiers by fliping adjacent bits.
+    """
+
+    def set_bit(array, i):
+        bit_offset = i % 8
+        # NOTE: Should this flip the bit instead?
+        array[i // 8] |= 1 << bit_offset
+
+    modifier_mutations = []
+
+    for bit in mset.instruction_modifier_bit_flag:
+        inst_ = bytearray(mset.inst)
+        set_bit(inst_, bit)
+        set_bit(inst_, bit + 1)
+        modifier_mutations.append((inst_, bit, bit + 1))
+
+        if bit - 1 not in mset.instruction_modifier_bit_flag:
+            inst_ = bytearray(mset.inst)
+            set_bit(inst_, bit)
+            set_bit(inst_, bit - 1)
+            modifier_mutations.append((inst_, bit, bit - 1))
+    if len(modifier_mutations) == 0:
+        return
+    instructions, offsets, adj_offsets = zip(*modifier_mutations)
+
+    disassembled = mset.disassembler.disassemble_parallel(instructions)
+    for disasm, bit, adj in zip(disassembled, offsets, adj_offsets):
+        if bit not in mset.instruction_modifier_bit_flag:
+            continue  # Already eleminated.
+        flag_name = mset.instruction_modifier_bit_flag[bit]
+        if not disasm:
+            continue
+        try:
+            parsed = InstructionParser.parseInstruction(disasm)
+        except Exception:
+            pass
+        if not parsed:
+            continue
+        # If the flag name is not in the disassembled instruction, this is not really a flag.
+        if flag_name not in parsed.modifiers:
+            mset.modifier_bits.add(adj)
+            print(disasm)
+            del mset.instruction_modifier_bit_flag[bit]
+            if adj in mset.instruction_modifier_bit_flag:
+                del mset.instruction_modifier_bit_flag[adj]
 
 
 class InstructionDescGenerator:
@@ -648,7 +655,9 @@ def analysis_pipeline(inst, disassembler):
     html_result += f"<p> distilled: {asm}</p>"
 
     mutation_set = InstructionMutationSet(inst, asm, mutations, disassembler)
-    mutation_set.analyze_second_stage()
+
+    analysis_disambiguate_flags(disassembler, mutation_set)
+
     ranges = mutation_set.dump_encoding_ranges()
     modifiers = ranges.enumerate_modifiers()
 
