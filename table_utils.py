@@ -25,8 +25,8 @@ INSTVIZ_HEADER = """
 
 class TableBuilder:
     # This is horrible, but it works well, I don't care.
-    def __init__(self, classes="instviz", header=INSTVIZ_HEADER):
-        self.result = INSTVIZ_HEADER
+    def __init__(self, classes="instviz", header=""):
+        self.result = header
         self.result += f'<table class="{classes}">'
 
     def tr_start(self, classes=""):
