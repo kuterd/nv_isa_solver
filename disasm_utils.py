@@ -36,6 +36,22 @@ class Disassembler:
             for inst, disasm in self.cache.items():
                 file.write(disasm + " --- " + inst.hex() + "\n")
 
+    # Find unuiqe instruction signatures from the cache.
+    def find_uniques_from_cache(self):
+        keys = {}
+        for inst, disasm in self.cache.items():
+            if len(disasm) == 0:
+                continue
+            try:
+                key = InstructionParser.parseInstruction(disasm[:-1]).get_key()
+            except Exception:
+                print("Couldn't parse", disasm)
+                continue
+            if key in keys:
+                continue
+            keys[key] = inst
+        return keys
+
     def disassemble(self, inst):
         inst = bytes(inst)
         if inst in self.cache:
@@ -124,7 +140,10 @@ class Disassembler:
             if len(distill_asm) == 0:
                 continue
 
-            distill_parsed = InstructionParser.parseInstruction(distill_asm)
+            try:
+                distill_parsed = InstructionParser.parseInstruction(distill_asm)
+            except Exception:
+                continue
             if original_parsed.get_key() != distill_parsed.get_key():
                 continue
 
