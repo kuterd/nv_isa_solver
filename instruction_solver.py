@@ -23,6 +23,7 @@ operand_colors = [
     "#FBDA73",
     "#72fc44",
     "#4e56fc",
+    "#fc9b14",
 ]
 
 
@@ -617,15 +618,7 @@ class ISADecoder:
         return discovered
 
 
-def analyze_instruction(inst, arch="SM90a"):
-    disassembler = Disassembler(arch)
-    inst = disassembler.distill_instruction(inst)
-    mutations = disassembler.mutate_inst(inst, end=14 * 8 - 2)
-    asm = disassembler.disassemble(inst)
-
-    parsed_inst = InstructionParser.parseInstruction(asm)
-    generator = InstructionDescGenerator()
-    result = """
+INSTRUCTION_DESC_HEADER = """
     <style>
         .instruction-desc {
             font-weight: bold;
@@ -640,20 +633,28 @@ def analyze_instruction(inst, arch="SM90a"):
             border-radius: 5px;
         }
     </style>
-
     """
-    result += generator.generate(parsed_inst)
-    result += f"<p> distilled: {asm}</p>"
+
+
+def analysis_pipeline(inst, disassembler):
+    inst = disassembler.distill_instruction(inst)
+    mutations = disassembler.mutate_inst(inst, end=14 * 8 - 2)
+    asm = disassembler.disassemble(inst)
+
+    parsed_inst = InstructionParser.parseInstruction(asm)
+    generator = InstructionDescGenerator()
+
+    html_result = generator.generate(parsed_inst)
+    html_result += f"<p> distilled: {asm}</p>"
 
     mutation_set = InstructionMutationSet(inst, asm, mutations, disassembler)
     mutation_set.analyze_second_stage()
     ranges = mutation_set.dump_encoding_ranges()
-    print(ranges.ranges)
     modifiers = ranges.enumerate_modifiers()
 
-    result += ranges.generate_html_table()
+    html_result += ranges.generate_html_table()
     for i, rows in enumerate(modifiers):
-        result += f"<p> Modifier Group {i}"
+        html_result += f"<p> Modifier Group {i}"
         builder = table_utils.TableBuilder()
         builder.tbody_start()
 
@@ -665,16 +666,28 @@ def analyze_instruction(inst, arch="SM90a"):
         builder.tbody_end()
         builder.end()
 
-        result += builder.result + "</p>"
-    file = open("ranges_result.html", "w")
-    file.write(result)
-    file.close()
-    return ranges
+        html_result += builder.result + "</p>"
+    return html_result, ranges
 
 
 if __name__ == "__main__":
-    distilled = bytes.fromhex("b573000e082a00000090010800e28300")
-    analyze_instruction(distilled)
+    # distilled = bytes.fromhex("b573000e082a00000090010800e28300")
+    # analyze_instruction(distilled)
+    disassembler = Disassembler("SM90a")
+    disassembler.load_cache("disasm_cache.txt")
+
+    instructions = list(disassembler.find_uniques_from_cache().items())
+
+    result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
+
+    for key, inst in instructions[:50]:
+        print("Analyzing", key)
+        html, ranges = analysis_pipeline(inst, disassembler)
+        result += html
+
+    with open("isa.html", "w") as file:
+        file.write(result)
+
     """
     distilled = distill_instruction_reverse(distilled, "SM90a")
     # analyze_instruction(distilled)
