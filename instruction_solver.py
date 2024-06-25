@@ -51,12 +51,20 @@ class EncodingRangeType(str, Enum):
 
 class EncodingRange:
     def __init__(
-        self, _type, start, length, operand_index=None, name=None, constant=None
+        self,
+        _type,
+        start,
+        length,
+        operand_index=None,
+        name=None,
+        constant=None,
+        group_id=None,
     ):
         self.type = _type
         self.start = start
         self.length = length
         self.operand_index = operand_index
+        self.group_id = group_id
         self.name = name
         self.constant = constant
 
@@ -168,6 +176,8 @@ class EncodingRanges:
                 text = erange.type
                 if erange.type == "operand_modifier" or erange.type == "modifier":
                     text = "modi"
+                    if erange.group_id:
+                        text += f" {erange.group_id}"
 
             vertical = (
                 erange.type == EncodingRangeType.FLAG
@@ -263,12 +273,42 @@ class InstructionMutationSet:
         self.operand_value_bits = set()
         self.operand_modifier_bits = set()
         self.operand_modifier_bit_flag = {}
-        self.modifier_bits = set()
         self.instruction_modifier_bit_flag = {}
-
         self.bit_to_operand = {}
         self.predicate_bits = set()
+
+        self.modifier_bits = set()
+        self.modifier_groups = {}
+
         self._analyze()
+
+    def canonicalize_modifier_groups(self):
+        """
+        Canonicalize modifier groups by assigning groupless bit sequences groups
+        """
+        max_group_id = None
+        fill_mode = False
+        fill_id = None
+
+        bits = sorted(list(self.modifier_bits))
+        for i, bit in enumerate(bits):
+            if bit in self.modifier_groups:
+                group_id = self.modifier_groups[bit]
+                max_group_id = (
+                    group_id if max_group_id is None else max(max_group_id, group_id)
+                )
+                continue
+
+            # When there is a discontinuity, we should change the group_id
+            if fill_mode and i != 0 and bits[i - 1] != bit - 1:
+                fill_mode = False
+
+            if not fill_mode:
+                max_group_id = 0 if max_group_id is None else max_group_id
+                fill_mode = True
+                fill_id = max_group_id + 1
+                max_group_id = fill_id
+            self.modifier_groups[bit] = fill_id
 
     def _analyze(self):
         parsed = InstructionParser.parseInstruction(self.disasm)
@@ -347,7 +387,12 @@ class InstructionMutationSet:
                     _push()
                     continue
                 else:
-                    new_range = EncodingRange(EncodingRangeType.MODIFIER, i, 1)
+                    new_range = EncodingRange(
+                        EncodingRangeType.MODIFIER,
+                        i,
+                        1,
+                        group_id=self.modifier_groups[i],
+                    )
             elif i in self.predicate_bits:
                 new_range = EncodingRange(EncodingRangeType.PREDICATE, i, 1)
             elif i in self.operand_value_bits:
@@ -390,6 +435,10 @@ class InstructionMutationSet:
                 and new_range.type == current_range.type
                 and new_range.operand_index == current_range.operand_index
                 and (new_range.type != EncodingRangeType.CONSTANT or i != 8 * 8)
+                and (
+                    new_range.group_id is None
+                    or new_range.group_id == current_range.group_id
+                )
             ):
                 current_range.length += 1
             else:
@@ -758,7 +807,7 @@ def analysis_pipeline(inst, disassembler):
     analysis_disambiguate_flags(disassembler, mutation_set)
     # analysis_run_fixedpoint(disassembler, mutation_set, analysis_extend_modifiers)
     # analysis_modifier_coalescing(disassembler, mutation_set)
-
+    mutation_set.canonicalize_modifier_groups()
     ranges = mutation_set.compute_encoding_ranges()
     html_result += ranges.generate_html_table()
     """
