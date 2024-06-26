@@ -321,7 +321,7 @@ class InstructionMutationSet:
     def _analyze(self):
         parsed = InstructionParser.parseInstruction(self.disasm)
         parsed_operands = parsed.get_flat_operands()
-
+        self.key = parsed.get_key()
         for i_bit, inst, asm in self.mutations:
             # The disassembler refused to decode this instruction.
             asm = asm.strip()
@@ -339,6 +339,7 @@ class InstructionMutationSet:
                 # NOTE: Should we only say this is a opcode bit if the base instruction is different.
                 self.opcode_bits.add(i_bit)
                 continue
+            # FIXME: This won't be able to handle '[R1].asd'
             mutated_operands = mutated_parsed.get_flat_operands()
 
             if parsed.predicate != mutated_parsed.predicate:
@@ -505,8 +506,8 @@ def analysis_disambiguate_flags(
         try:
             parsed = InstructionParser.parseInstruction(disasm)
         except Exception:
-            pass
-        if not parsed:
+            continue
+        if parsed.get_key() != mset.key:
             continue
         # If the flag name is not in the disassembled instruction, this is not really a flag.
         if flag_name not in parsed.modifiers:
@@ -516,6 +517,47 @@ def analysis_disambiguate_flags(
             if adj in mset.instruction_modifier_bit_flag:
                 del mset.instruction_modifier_bit_flag[adj]
 
+    return changed
+
+
+def analysis_disambiguate_operand_flags(
+    disassembler: Disassembler, mset: InstructionMutationSet
+) -> bool:
+    modifier_mutations = []
+    for bit in mset.operand_modifier_bit_flag:
+        inst_ = bytearray(mset.inst)
+        set_bit(inst_, bit)
+        set_bit(inst_, bit + 1)
+        modifier_mutations.append((inst_, bit, bit + 1))
+        if bit - 1 not in mset.operand_modifier_bit_flag:
+            inst_ = bytearray(mset.inst)
+            set_bit(inst_, bit)
+            set_bit(inst_, bit - 1)
+            modifier_mutations.append((inst_, bit, bit - 1))
+    if len(modifier_mutations) == 0:
+        return
+
+    instructions, offsets, adj_offsets = zip(*modifier_mutations)
+    disassembled = mset.disassembler.disassemble_parallel(instructions)
+    changed = False
+    for disasm, bit, adj in zip(disassembled, offsets, adj_offsets):
+        if bit not in mset.operand_modifier_bit_flag:
+            continue
+        flag_name = mset.operand_modifier_bit_flag[bit]
+        if not disasm:
+            continue
+        try:
+            parsed = InstructionParser.parseInstruction(disasm)
+        except Exception:
+            continue
+        if parsed.get_key() != mset.key:
+            continue
+        mutated_operands = parsed.get_flat_operands()
+        if flag_name not in mutated_operands[mset.bit_to_operand[bit]].modifiers:
+            changed = True
+            del mset.operand_modifier_bit_flag[bit]
+            if adj in mset.operand_modifier_bit_flag:
+                del mset.operand_modifier_bit_flag[adj]
     return changed
 
 
@@ -872,6 +914,7 @@ def analysis_pipeline(inst, disassembler):
     mutation_set = InstructionMutationSet(inst, asm, mutations, disassembler)
 
     analysis_disambiguate_flags(disassembler, mutation_set)
+    analysis_disambiguate_operand_flags(disassembler, mutation_set)
     analysis_run_fixedpoint(disassembler, mutation_set, analysis_extend_modifiers)
     analysis_modifier_coalescing(disassembler, mutation_set)
     analysis_run_fixedpoint(disassembler, mutation_set, analysis_modifier_splitting)
