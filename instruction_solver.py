@@ -222,7 +222,7 @@ def analyze_modifiers_enumerate(original: List[str], mutated: List[str]):
     result = ""
     for name, count in difference.items():
         if count == 1:
-            result += "." + name
+            result += name + "."
     return result
 
 
@@ -286,6 +286,8 @@ class InstructionMutationSet:
         """
         Canonicalize modifier groups by assigning groupless bit sequences groups
         """
+
+        # Step 1: Assign a number to each range.
         max_group_id = None
         fill_mode = False
         fill_id = None
@@ -293,22 +295,28 @@ class InstructionMutationSet:
         bits = sorted(list(self.modifier_bits))
         for i, bit in enumerate(bits):
             if bit in self.modifier_groups:
-                group_id = self.modifier_groups[bit]
-                max_group_id = (
-                    group_id if max_group_id is None else max(max_group_id, group_id)
-                )
                 continue
-
-            # When there is a discontinuity, we should change the group_id
+                # When there is a discontinuity, we should change the group_id
             if fill_mode and i != 0 and bits[i - 1] != bit - 1:
                 fill_mode = False
 
             if not fill_mode:
-                max_group_id = 0 if max_group_id is None else max_group_id
+                max_group_id = max([0] + list(self.modifier_groups.values()))
                 fill_mode = True
                 fill_id = max_group_id + 1
                 max_group_id = fill_id
             self.modifier_groups[bit] = fill_id
+
+        # Step 2: Fix numbers
+        max_num = 0
+        num_map = {}
+        bits = sorted(list(self.modifier_bits))
+        for bit in bits:
+            gid = self.modifier_groups[bit]
+            if gid not in num_map:
+                num_map[gid] = max_num + 1
+                max_num += 1
+            self.modifier_groups[bit] = num_map[gid]
 
     def _analyze(self):
         parsed = InstructionParser.parseInstruction(self.disasm)
@@ -346,7 +354,6 @@ class InstructionMutationSet:
                     if effected:
                         self.bit_to_operand[i_bit] = i
                         self.operand_modifier_bits.add(i_bit)
-                        print(a.modifiers, b.modifiers)
                     if flag:
                         self.operand_modifier_bit_flag[i_bit] = flag
 
@@ -366,6 +373,7 @@ class InstructionMutationSet:
         """
         result = []
         current_range = None
+        self.canonicalize_modifier_groups()
 
         def _push():
             nonlocal current_range
@@ -546,19 +554,18 @@ def analysis_extend_modifiers(
         # Check if there is any difference in modifiers.
         if modi_parsed.modifiers != original_parsed.modifiers:
             # Adjacent bit is a part of the modifier
+
+            changed = adj not in mset.modifier_bits
             mset.modifier_bits.add(adj)
             if adj in mset.instruction_modifier_bit_flag:
                 del mset.instruction_modifier_bit_flag[adj]
-            changed = True
 
     for rng in modifier_ranges:
         # 1 0 0 0 1 usually works better.
         analyse_adj(rng.start, rng.start - 1)
-        analyse_adj(rng.start + rng.length // 2, rng.start - 1)
-        analyse_adj(rng.start + rng.length - 1, rng.start - 1)
+        # analyse_adj(rng.start + rng.length // 2, rng.start - 1)
         analyse_adj(rng.start, rng.start + rng.length)
-        analyse_adj(rng.start + rng.length - 1, rng.start + rng.length)
-        analyse_adj(rng.start + rng.length // 2, rng.start + rng.length)
+        # analyse_adj(rng.start + rng.length // 2, rng.start + rng.length)
     return changed
 
 
@@ -585,6 +592,68 @@ def analysis_modifier_coalescing(
             changed = True
             mset.modifier_bits.add(i)
     return changed
+
+
+def analysis_modifier_splitting(
+    disassembler: Disassembler, mset: InstructionMutationSet
+):
+    ranges = mset.compute_encoding_ranges()
+    modifier_ranges = ranges._find(EncodingRangeType.MODIFIER)
+
+    def analyse_adj(modi_bit, adj):
+        inst = []
+        array = bytearray(mset.inst)
+        inst.append(array)
+
+        array = bytearray(array)
+        set_bit(array, modi_bit)
+        inst.append(array)
+
+        array = bytearray(array)
+        set_bit(array, adj)
+        inst.append(array)
+
+        inst = disassembler.disassemble_parallel(inst)
+        if "" in inst:
+            return False
+        try:
+            orig, modi, adj = [InstructionParser.parseInstruction(asm) for asm in inst]
+        except Exception:
+            return False
+
+        if len(set([orig.get_key(), modi.get_key(), adj.get_key()])) != 1:
+            return False
+
+        orig_difference = analyze_modifiers_enumerate(orig.modifiers, modi.modifiers)
+        if (
+            len(orig_difference) == 0
+            or "." in orig_difference[:-1]
+            or orig_difference.startswith("INVALID")
+        ):
+            return False
+        # print("INDICATOR", orig_difference)
+        orig_difference = orig_difference[:-1]
+        if (
+            orig_difference in adj.modifiers
+            and adj.modifiers != modi.modifiers
+            and adj.modifiers != orig.modifiers
+        ):
+            return True
+
+    def split_range(rng, i):
+        next_group_id = max([0] + list(mset.modifier_groups.values())) + 1
+        for i in range(i, rng.length):
+            mset.modifier_groups[rng.start + i] = next_group_id
+
+    for rng in modifier_ranges:
+        for i in range(1, rng.length - 1):
+            if analyse_adj(rng.start, rng.start + i) or analyse_adj(
+                rng.start + i - 1, rng.start + i
+            ):
+                split_range(rng, i)
+                return True
+
+    return False
 
 
 INSTRUCTION_DESC_HEADER = """
@@ -787,8 +856,6 @@ def analysis_run_fixedpoint(
     change = True
     while change:
         change = fn(disassembler, mset)
-        if change:
-            print("analysis changed modifiers")
 
 
 def analysis_pipeline(inst, disassembler):
@@ -805,12 +872,12 @@ def analysis_pipeline(inst, disassembler):
     mutation_set = InstructionMutationSet(inst, asm, mutations, disassembler)
 
     analysis_disambiguate_flags(disassembler, mutation_set)
-    # analysis_run_fixedpoint(disassembler, mutation_set, analysis_extend_modifiers)
-    # analysis_modifier_coalescing(disassembler, mutation_set)
+    analysis_run_fixedpoint(disassembler, mutation_set, analysis_extend_modifiers)
+    analysis_modifier_coalescing(disassembler, mutation_set)
+    analysis_run_fixedpoint(disassembler, mutation_set, analysis_modifier_splitting)
     mutation_set.canonicalize_modifier_groups()
     ranges = mutation_set.compute_encoding_ranges()
     html_result += ranges.generate_html_table()
-    """
     modifiers = ranges.enumerate_modifiers()
 
     for i, rows in enumerate(modifiers):
@@ -827,7 +894,6 @@ def analysis_pipeline(inst, disassembler):
         builder.end()
 
         html_result += builder.result + "</p>"
-    """
     return html_result, ranges
 
 
@@ -840,8 +906,8 @@ if __name__ == "__main__":
     instructions = list(disassembler.find_uniques_from_cache().items())
 
     result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
-
-    for key, inst in instructions[:200]:
+    print("Found", len(instructions), "instructions")
+    for key, inst in instructions[:250]:
         print("Analyzing", key)
         html, ranges = analysis_pipeline(inst, disassembler)
         result += html
