@@ -21,15 +21,18 @@ class Disassembler:
         self.cache = {}
         self.arch = arch
         self.nvdisasm = nvdisasm
-        if batch_size == None:
+        if batch_size is None:
             batch_size = multiprocessing.cpu_count()
         self.batch_size = batch_size
 
     def load_cache(self, filename):
-        with open(filename) as file:
-            for line in file:
-                asm, inst = line.split("---")
-                self.cache[bytes.fromhex(inst.strip())] = asm.strip()
+        try:
+            with open(filename) as file:
+                for line in file:
+                    asm, inst = line.split("---")
+                    self.cache[bytes.fromhex(inst.strip())] = asm.strip()
+        except FileNotFoundError:
+            pass
 
     def dump_cache(self, filename):
         with open(filename, "w") as file:

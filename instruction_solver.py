@@ -9,8 +9,8 @@ from disasm_utils import Disassembler, set_bit_range2, get_bit_range2
 import table_utils
 import parser
 from parser import InstructionParser
-
-DISASM = "/opt/cuda/bin/nvdisasm"
+from concurrent import futures
+from argparse import ArgumentParser
 
 operand_colors = [
     "#FE8386",
@@ -80,7 +80,12 @@ class EncodingRange:
 
 
 class EncodingRanges:
-    def __init__(self, ranges, inst, disassembler):
+    def __init__(
+        self,
+        ranges,
+        inst,
+        disassembler,
+    ):
         self.ranges = ranges
         self.disassembler = disassembler
         self.inst = inst
@@ -388,11 +393,11 @@ class InstructionMutationSet:
             except Exception as e:
                 print(asm, e)
                 continue
-            # print(mutated_parsed.get_key())
             if self.parsed.get_key() != mutated_parsed.get_key():
                 # NOTE: Should we only say this is a opcode bit if the base instruction is different.
                 self.opcode_bits.add(i_bit)
                 continue
+
             # FIXME: This won't be able to handle '[R1].asd'
             mutated_operands = mutated_parsed.get_flat_operands()
 
@@ -568,7 +573,6 @@ def analysis_disambiguate_flags(
             continue
         # If the flag name is not in the disassembled instruction, this is not really a flag.
         if flag_name not in parsed.modifiers:
-            print("FLAG", flag_name, "removed", adj, bit)
             changed = True
             mset.modifier_bits.add(adj)
             del mset.instruction_modifier_bit_flag[bit]
@@ -796,7 +800,6 @@ def analysis_modifier_splitting(
             return count_orig == count_adj
 
     def split_range(rng, i):
-        print("Splitting!", rng.group_id, "len", rng.length)
         next_group_id = max([0] + list(mset.modifier_groups.values())) + 1
         for i in range(i, rng.length):
             mset.modifier_groups[rng.start + i] = next_group_id
@@ -1074,10 +1077,15 @@ def analyse_and_generate_html(inst, disassembler):
 
 
 if __name__ == "__main__":
-    # distilled = bytes.fromhex("b573000e082a00000090010800e28300")
-    # analyze_instruction(distilled)
-    disassembler = Disassembler("SM90a")
-    disassembler.load_cache("disasm_cache.txt")
+    parser = ArgumentParser()
+    parser.add_argument("--arch", default="SM90a")
+    parser.add_argument("--cache_file", default="disasm_cache.txt")
+    parser.add_argument("--nvdisasm", default="nvdisasm")
+    parser.add_argument("--num_parallel", default=1, type=int)
+    arguments = parser.parse_args()
+
+    disassembler = Disassembler(arguments.arch, nvdisasm=arguments.nvdisasm)
+    disassembler.load_cache(arguments.cache_file)
 
     instructions = disassembler.find_uniques_from_cache()
     # instructions = [("IMAD_R_R_I_R", instructions["IMAD_R_R_I_R"])]
@@ -1086,19 +1094,16 @@ if __name__ == "__main__":
     result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
     print("Found", len(instructions), "instructions")
     instructions = sorted(instructions, key=lambda x: x[0])
-    for key, inst in instructions:
-        print("Analyzing", key)
-        html, ranges = analyse_and_generate_html(inst, disassembler)
-        result += html
+
+    with futures.ThreadPoolExecutor(max_workers=arguments.num_parallel) as executor:
+        instruction_futures = {}
+        for key, inst in instructions:
+            future = executor.submit(analyse_and_generate_html, inst, disassembler)
+            instruction_futures[key] = future
+
+        for key, inst in instructions:
+            result += future.result()[0]
 
     with open("isa.html", "w") as file:
         file.write(result)
     disassembler.dump_cache("disasm_cache.txt")
-    """
-    distilled = distill_instruction_reverse(distilled, "SM90a")
-    # analyze_instruction(distilled)
-
-    decoder = ISADecoder([], "SM90a", "SM90")
-    decoder.scan_opcode(distilled)
-    decoder.dump_corpus("reverse_scan.txt")
-    """
