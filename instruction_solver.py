@@ -272,6 +272,7 @@ class InstructionMutationSet:
     def __init__(self, inst, disasm, mutations, disassembler):
         self.inst = inst
         self.disasm = disasm
+        self.parsed = InstructionParser.parseInstruction(self.disasm)
         self.mutations = mutations
         self.disassembler = disassembler
 
@@ -330,9 +331,8 @@ class InstructionMutationSet:
             self.modifier_groups[bit] = num_map[gid]
 
     def _analyze(self):
-        parsed = InstructionParser.parseInstruction(self.disasm)
-        parsed_operands = parsed.get_flat_operands()
-        self.key = parsed.get_key()
+        parsed_operands = self.parsed.get_flat_operands()
+        self.key = self.parsed.get_key()
         for i_bit, inst, asm in self.mutations:
             # The disassembler refused to decode this instruction.
             asm = asm.strip()
@@ -346,14 +346,14 @@ class InstructionMutationSet:
                 print(asm, e)
                 continue
             # print(mutated_parsed.get_key())
-            if parsed.get_key() != mutated_parsed.get_key():
+            if self.parsed.get_key() != mutated_parsed.get_key():
                 # NOTE: Should we only say this is a opcode bit if the base instruction is different.
                 self.opcode_bits.add(i_bit)
                 continue
             # FIXME: This won't be able to handle '[R1].asd'
             mutated_operands = mutated_parsed.get_flat_operands()
 
-            if parsed.predicate != mutated_parsed.predicate:
+            if self.parsed.predicate != mutated_parsed.predicate:
                 self.predicate_bits.add(i_bit)
 
             operand_effected = False
@@ -375,7 +375,7 @@ class InstructionMutationSet:
                 continue
             # Analyze instruction modifiers.
             effected, flag = analyze_modifiers(
-                parsed.modifiers, mutated_parsed.modifiers
+                self.parsed.modifiers, mutated_parsed.modifiers
             )
             if effected:
                 self.modifier_bits.add(i_bit)
@@ -482,7 +482,6 @@ class InstructionMutationSet:
 
 def set_bit(array, i):
     bit_offset = i % 8
-    # NOTE: Should this flip the bit instead?
     array[i // 8] ^= 1 << bit_offset
 
 
@@ -576,6 +575,52 @@ def analysis_disambiguate_operand_flags(
             if adj in mset.operand_modifier_bit_flag:
                 del mset.operand_modifier_bit_flag[adj]
     return changed
+
+
+def analysis_operand_fix(
+    disassembler: Disassembler, mset: InstructionMutationSet
+) -> bool:
+    """
+    With operands like [UR10 + 0x1], a constant IMM of 0 changes the operand
+    signature and won't be removed with distillation, causing a discontinuity
+    in the operand or makes it look shorter than it actually is.
+    """
+
+    operands = mset.parsed.get_flat_operands()
+
+    def mutate_test(operand_index, idx, adj):
+        inst = bytearray(mset.inst)
+        set_bit(inst, idx)
+        set_bit(inst, adj)
+        asm = disassembler.disassemble(inst)
+        if len(asm) == 0:
+            return
+        try:
+            parsed = InstructionParser.parseInstruction(asm)
+        except Exception:
+            return
+        if parsed.get_key() != mset.key:
+            return
+        mutated_operands = parsed.get_flat_operands()
+        if operands[operand_index] == mutated_operands[operand_index]:
+            return
+        mset.operand_value_bits.add(idx)
+        mset.bit_to_operand[idx] = operand_index
+
+    ranges = mset.compute_encoding_ranges()
+    operand_ranges = ranges._find(EncodingRangeType.OPERAND)
+
+    for i, rng in enumerate(operand_ranges):
+        operand = operands[rng.operand_index]
+        if not isinstance(operand, parser.IntIMMOperand) or not isinstance(
+            operand.parent, parser.AddressOperand
+        ):
+            continue
+        # Not 100% sure about this, what if the bit is between bytes?
+        if rng.start % 8 != 0:
+            mutate_test(rng.operand_index, rng.start - 1, rng.start)
+        elif rng.length % 8 != 0:
+            mutate_test(rng.operand_index, rng.start + rng.length, rng.start)
 
 
 def analysis_extend_modifiers(
@@ -939,6 +984,7 @@ def instruction_analysis_pipeline(inst, disassembler):
     mutation_set = InstructionMutationSet(inst, asm, mutations, disassembler)
     parsed_inst = InstructionParser.parseInstruction(asm)
     analysis_run_fixedpoint(disassembler, mutation_set, analysis_disambiguate_flags)
+    analysis_operand_fix(disassembler, mutation_set)
     analysis_disambiguate_operand_flags(disassembler, mutation_set)
     analysis_run_fixedpoint(disassembler, mutation_set, analysis_extend_modifiers)
     # analysis_modifier_coalescing(disassembler, mutation_set)
