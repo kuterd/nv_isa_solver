@@ -104,7 +104,7 @@ class EncodingRanges:
     def _find(self, type):
         return list(filter(lambda x: x.type == type, self.ranges))
 
-    def encode(self, sub_operands, modifiers):
+    def encode(self, sub_operands, modifiers, operand_modifiers={}):
         result = bytearray(b"\0" * 16)
         modifier_i = 0
         for range in self.ranges:
@@ -116,6 +116,12 @@ class EncodingRanges:
             elif range.type == EncodingRangeType.MODIFIER:
                 value = modifiers[modifier_i]
                 modifier_i += 1
+            elif (
+                range.type == EncodingRangeType.OPERAND_MODIFIER
+                and range.operand_index in operand_modifiers
+            ):
+                value = operand_modifiers[range.operand_index]
+
             if not value:
                 continue
             set_bit_range2(result, range.start, range.start + range.length, value)
@@ -131,8 +137,6 @@ class EncodingRanges:
             insts = []
             seen = set()
             for modi_i in range(2**modifier.length):
-                # Gray code
-                # modi_i = modi_i ^ (modi_i >> 1)
                 modi_values = [
                     get_bit_range2(self.inst, rng.start, rng.start + rng.length)
                     for rng in modifiers
@@ -153,6 +157,45 @@ class EncodingRanges:
                 analysis_result[-1].append((bin(i)[2:].zfill(modifier.length), name))
                 comp = asm
         return analysis_result
+
+    def enumerate_operand_modifiers(self):
+        operand_modifiers = self._find(EncodingRangeType.OPERAND_MODIFIER)
+        modifiers = self._find(EncodingRangeType.MODIFIER)
+        result = {}
+        modi_values = [
+            get_bit_range2(self.inst, rng.start, rng.start + rng.length)
+            for rng in modifiers
+        ]
+        operand_values = [0] * self.operand_count()
+
+        for modifier in operand_modifiers:
+            insts = []
+            for modi_i in range(2**modifier.length):
+                operand_modis = {}
+                operand_modis[modifier.operand_index] = modi_i
+                insts.append(self.encode(operand_values, modi_values, operand_modis))
+            disasms = self.disassembler.disassemble_parallel(insts)
+            current = []
+            result[modifier.operand_index] = current
+            comp = disasms[1]
+            for i, asm in enumerate(disasms):
+                try:
+                    comp_operands = InstructionParser.parseInstruction(
+                        comp
+                    ).get_flat_operands()
+                    asm_operands = InstructionParser.parseInstruction(
+                        asm
+                    ).get_flat_operands()
+                except Exception:
+                    continue
+                name = analyze_modifiers_enumerate(
+                    comp_operands[modifier.operand_index].modifiers,
+                    asm_operands[modifier.operand_index].modifiers,
+                )
+                # name = ".".join(asm_modis)
+                comp = asm
+                current.append((bin(i)[2:].zfill(modifier.length), name))
+        return result
 
     def generate_html_table(self):
         builder = table_utils.TableBuilder()
@@ -973,9 +1016,6 @@ def analysis_run_fixedpoint(
         change = fn(disassembler, mset)
 
 
-problem_modi_instructions = 0
-
-
 def instruction_analysis_pipeline(inst, disassembler):
     inst = disassembler.distill_instruction(inst)
     asm = disassembler.disassemble(inst)
@@ -994,8 +1034,23 @@ def instruction_analysis_pipeline(inst, disassembler):
     return inst, asm, parsed_inst, ranges
 
 
+def generate_modifier_table(title, modifiers):
+    html_result = "<p>" + title
+    builder = table_utils.TableBuilder()
+    builder.tbody_start()
+    for row in modifiers:
+        builder.tr_start()
+        for cell in row:
+            builder.push(cell)
+        builder.tr_end()
+    builder.tbody_end()
+    builder.end()
+
+    html_result += builder.result + "</p>"
+    return html_result
+
+
 def analyse_and_generate_html(inst, disassembler):
-    global problem_modi_instructions
     generator = InstructionDescGenerator()
 
     inst, asm, parsed_inst, ranges = instruction_analysis_pipeline(inst, disassembler)
@@ -1006,29 +1061,15 @@ def analyse_and_generate_html(inst, disassembler):
 
     html_result += ranges.generate_html_table()
     modifiers = ranges.enumerate_modifiers()
-    is_problem = False
     for i, rows in enumerate(modifiers):
-        html_result += f"<p> Modifier Group {i + 1}"
-        builder = table_utils.TableBuilder()
-        builder.tbody_start()
-        if len(rows) < 2:
-            is_problem = True
-        non_empty = False
-        for row in rows:
-            builder.tr_start()
-            if len(row[1]) != 0 and "INVALID" not in row[1]:
-                non_empty = True
-            for cell in row:
-                builder.push(cell)
-            builder.tr_end()
-        if not non_empty:
-            is_problem = True
-        builder.tbody_end()
-        builder.end()
+        title = f"Modifier Group {i + 1}"
+        html_result += generate_modifier_table(title, rows)
 
-        html_result += builder.result + "</p>"
-    if is_problem:
-        problem_modi_instructions += 1
+    operand_modifiers = ranges.enumerate_operand_modifiers()
+    for operand, modifiers in operand_modifiers.items():
+        title = f"Operand {operand} operand modifiers"
+        html_result += generate_modifier_table(title, modifiers)
+
     return html_result, ranges
 
 
@@ -1053,12 +1094,6 @@ if __name__ == "__main__":
     with open("isa.html", "w") as file:
         file.write(result)
     disassembler.dump_cache("disasm_cache.txt")
-    print(
-        "Detected",
-        problem_modi_instructions,
-        "problematic instructions of out",
-        len(instructions),
-    )
     """
     distilled = distill_instruction_reverse(distilled, "SM90a")
     # analyze_instruction(distilled)
