@@ -49,6 +49,7 @@ p_ConstTrDict = {
     r"\bURZ\b": "UR63",
     r"\bPT\b": "P7",
     r"\bUPT\b": "UP7",
+    r"\bSRZ": "SR_0",
     r"\bQNAN\b": "NAN",
 }
 
@@ -391,7 +392,7 @@ class _InstructionParser:
         bank = self._parseIndexedToken(match.group("URBank"))
         address = self._parseAddress(match.group("Addr"))
 
-        return ConstantMemOperand(bank, address)
+        return ConstantMemOperand(bank, address, cx=True)
 
     def _parseAttribute(self, op):
         match = p_AttributeType.match(op)

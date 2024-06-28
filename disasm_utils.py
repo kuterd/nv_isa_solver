@@ -191,6 +191,15 @@ def set_bit_range2(byte_array, start_bit, end_bit, value):
             byte_array[i // 8] &= ~mask
 
 
+def get_bit_range2(byte_array, start_bit, end_bit):
+    result = 0
+    for i in range(start_bit, end_bit):
+        mask = 1 << (i % 8)
+        v = (byte_array[i // 8] >> (i % 8)) & 1
+        result |= v << (i - start_bit)
+    return result
+
+
 def dump_bitrange(inst):
     for i in range(8 * 8):
         if i % 8 == 0:

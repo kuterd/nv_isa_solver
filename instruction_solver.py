@@ -5,10 +5,7 @@ from enum import Enum
 from typing import List
 from collections import Counter
 
-from disasm_utils import (
-    Disassembler,
-    set_bit_range2,
-)
+from disasm_utils import Disassembler, set_bit_range2, get_bit_range2
 import table_utils
 import parser
 from parser import InstructionParser
@@ -24,6 +21,8 @@ operand_colors = [
     "#72fc44",
     "#4e56fc",
     "#fc9b14",
+    "#fc556e",
+    "#256336",
 ]
 
 
@@ -81,9 +80,10 @@ class EncodingRange:
 
 
 class EncodingRanges:
-    def __init__(self, ranges, disassembler):
+    def __init__(self, ranges, inst, disassembler):
         self.ranges = ranges
         self.disassembler = disassembler
+        self.inst = inst
 
     def _count(self, type):
         result = 0
@@ -129,8 +129,14 @@ class EncodingRanges:
 
         for i, modifier in enumerate(modifiers):
             insts = []
-            for modi_i in range(pow(2, modifier.length)):
-                modi_values = [0] * len(modifiers)
+            seen = set()
+            for modi_i in range(2**modifier.length):
+                # Gray code
+                # modi_i = modi_i ^ (modi_i >> 1)
+                modi_values = [
+                    get_bit_range2(self.inst, rng.start, rng.start + rng.length)
+                    for rng in modifiers
+                ]
                 modi_values[i] = modi_i
                 insts.append(self.encode(operand_values, modi_values))
             disasms = self.disassembler.disassemble_parallel(insts)
@@ -143,6 +149,7 @@ class EncodingRanges:
                 except Exception:
                     continue
                 name = analyze_modifiers_enumerate(comp_modis, asm_modis)
+                # name = ".".join(asm_modis)
                 analysis_result[-1].append((bin(i)[2:].zfill(modifier.length), name))
                 comp = asm
         return analysis_result
@@ -162,7 +169,6 @@ class EncodingRanges:
         builder.tr_start()
         for erange in self.ranges:
             if current_length == 8 * 8:
-                print("Inserting seperator")
                 builder.tr_end()
                 seperator()
                 builder.tr_start()
@@ -221,8 +227,10 @@ def analyze_modifiers_enumerate(original: List[str], mutated: List[str]):
     difference.subtract(original)
     result = ""
     for name, count in difference.items():
-        if count == 1:
-            result += name + "."
+        if len(name) == 0 or count <= 0:
+            continue
+        result += ".".join([name] * count) + "."
+
     return result
 
 
@@ -281,6 +289,9 @@ class InstructionMutationSet:
         self.modifier_groups = {}
 
         self._analyze()
+
+    def reset_modifier_groups(self):
+        self.modifier_groups = {}
 
     def canonicalize_modifier_groups(self):
         """
@@ -345,19 +356,23 @@ class InstructionMutationSet:
             if parsed.predicate != mutated_parsed.predicate:
                 self.predicate_bits.add(i_bit)
 
+            operand_effected = False
             # Analyze operand values and operand modifiers.
             for i, (a, b) in enumerate(zip(mutated_operands, parsed_operands)):
                 if not a.compare(b):
                     self.operand_value_bits.add(i_bit)
                     self.bit_to_operand[i_bit] = i
+                    operand_effected = True
                 else:
                     effected, flag = analyze_modifiers(b.modifiers, a.modifiers)
                     if effected:
                         self.bit_to_operand[i_bit] = i
                         self.operand_modifier_bits.add(i_bit)
+                        operand_effected = True
                     if flag:
                         self.operand_modifier_bit_flag[i_bit] = flag
-
+            if operand_effected:
+                continue
             # Analyze instruction modifiers.
             effected, flag = analyze_modifiers(
                 parsed.modifiers, mutated_parsed.modifiers
@@ -462,7 +477,7 @@ class InstructionMutationSet:
 
         _push()
 
-        return EncodingRanges(result, self.disassembler)
+        return EncodingRanges(result, self.inst, self.disassembler)
 
 
 def set_bit(array, i):
@@ -492,7 +507,7 @@ def analysis_disambiguate_flags(
             set_bit(inst_, bit - 1)
             modifier_mutations.append((inst_, bit, bit - 1))
     if len(modifier_mutations) == 0:
-        return
+        return False
     instructions, offsets, adj_offsets = zip(*modifier_mutations)
 
     disassembled = mset.disassembler.disassemble_parallel(instructions)
@@ -511,11 +526,13 @@ def analysis_disambiguate_flags(
             continue
         # If the flag name is not in the disassembled instruction, this is not really a flag.
         if flag_name not in parsed.modifiers:
+            print("FLAG", flag_name, "removed", adj, bit)
             changed = True
             mset.modifier_bits.add(adj)
             del mset.instruction_modifier_bit_flag[bit]
             if adj in mset.instruction_modifier_bit_flag:
                 del mset.instruction_modifier_bit_flag[adj]
+            mset.reset_modifier_groups()
 
     return changed
 
@@ -608,6 +625,8 @@ def analysis_extend_modifiers(
         # analyse_adj(rng.start + rng.length // 2, rng.start - 1)
         analyse_adj(rng.start, rng.start + rng.length)
         # analyse_adj(rng.start + rng.length // 2, rng.start + rng.length)
+    if changed:
+        mset.reset_modifier_groups()
     return changed
 
 
@@ -618,7 +637,7 @@ def analysis_modifier_coalescing(
     ranges = mset.compute_encoding_ranges()
 
     for i, rng in enumerate(ranges.ranges[1:]):
-        if rng.length > 1:
+        if rng.length > 2:
             continue
         if (
             ranges.ranges[i].type != EncodingRangeType.MODIFIER
@@ -639,6 +658,10 @@ def analysis_modifier_coalescing(
 def analysis_modifier_splitting(
     disassembler: Disassembler, mset: InstructionMutationSet
 ):
+    """
+    Split the modifier if there is independence between modifiers.
+
+    """
     ranges = mset.compute_encoding_ranges()
     modifier_ranges = ranges._find(EncodingRangeType.MODIFIER)
 
@@ -680,17 +703,22 @@ def analysis_modifier_splitting(
             and adj.modifiers != modi.modifiers
             and adj.modifiers != orig.modifiers
         ):
-            return True
+            count_orig = Counter(modi.modifiers)[orig_difference]
+            count_adj = Counter(adj.modifiers)[orig_difference]
+            return count_orig == count_adj
 
     def split_range(rng, i):
+        print("Splitting!", rng.group_id, "len", rng.length)
         next_group_id = max([0] + list(mset.modifier_groups.values())) + 1
         for i in range(i, rng.length):
             mset.modifier_groups[rng.start + i] = next_group_id
 
     for rng in modifier_ranges:
         for i in range(1, rng.length - 1):
-            if analyse_adj(rng.start, rng.start + i) or analyse_adj(
-                rng.start + i - 1, rng.start + i
+            if (
+                analyse_adj(rng.start, rng.start + i)
+                or analyse_adj(rng.start + i - 1, rng.start + i)
+                or analyse_adj(rng.start, rng.start + i)
             ):
                 split_range(rng, i)
                 return True
@@ -900,43 +928,61 @@ def analysis_run_fixedpoint(
         change = fn(disassembler, mset)
 
 
-def analysis_pipeline(inst, disassembler):
+problem_modi_instructions = 0
+
+
+def instruction_analysis_pipeline(inst, disassembler):
     inst = disassembler.distill_instruction(inst)
-    mutations = disassembler.mutate_inst(inst, end=14 * 8 - 2)
     asm = disassembler.disassemble(inst)
 
+    mutations = disassembler.mutate_inst(inst, end=14 * 8 - 2)
+    mutation_set = InstructionMutationSet(inst, asm, mutations, disassembler)
     parsed_inst = InstructionParser.parseInstruction(asm)
+    analysis_run_fixedpoint(disassembler, mutation_set, analysis_disambiguate_flags)
+    analysis_disambiguate_operand_flags(disassembler, mutation_set)
+    analysis_run_fixedpoint(disassembler, mutation_set, analysis_extend_modifiers)
+    # analysis_modifier_coalescing(disassembler, mutation_set)
+    analysis_run_fixedpoint(disassembler, mutation_set, analysis_modifier_splitting)
+    ranges = mutation_set.compute_encoding_ranges()
+
+    return inst, asm, parsed_inst, ranges
+
+
+def analyse_and_generate_html(inst, disassembler):
+    global problem_modi_instructions
     generator = InstructionDescGenerator()
+
+    inst, asm, parsed_inst, ranges = instruction_analysis_pipeline(inst, disassembler)
 
     html_result = generator.generate(parsed_inst)
     html_result += f"<p> distilled: {asm}</p>"
+    html_result += f"<p> key: {parsed_inst.get_key()}</p>"
 
-    mutation_set = InstructionMutationSet(inst, asm, mutations, disassembler)
-
-    analysis_disambiguate_flags(disassembler, mutation_set)
-    analysis_disambiguate_operand_flags(disassembler, mutation_set)
-    analysis_run_fixedpoint(disassembler, mutation_set, analysis_extend_modifiers)
-    analysis_modifier_coalescing(disassembler, mutation_set)
-    analysis_run_fixedpoint(disassembler, mutation_set, analysis_modifier_splitting)
-    mutation_set.canonicalize_modifier_groups()
-    ranges = mutation_set.compute_encoding_ranges()
     html_result += ranges.generate_html_table()
     modifiers = ranges.enumerate_modifiers()
-
+    is_problem = False
     for i, rows in enumerate(modifiers):
-        html_result += f"<p> Modifier Group {i}"
+        html_result += f"<p> Modifier Group {i + 1}"
         builder = table_utils.TableBuilder()
         builder.tbody_start()
-
+        if len(rows) < 2:
+            is_problem = True
+        non_empty = False
         for row in rows:
             builder.tr_start()
+            if len(row[1]) != 0 and "INVALID" not in row[1]:
+                non_empty = True
             for cell in row:
                 builder.push(cell)
             builder.tr_end()
+        if not non_empty:
+            is_problem = True
         builder.tbody_end()
         builder.end()
 
         html_result += builder.result + "</p>"
+    if is_problem:
+        problem_modi_instructions += 1
     return html_result, ranges
 
 
@@ -946,19 +992,27 @@ if __name__ == "__main__":
     disassembler = Disassembler("SM90a")
     disassembler.load_cache("disasm_cache.txt")
 
-    instructions = list(disassembler.find_uniques_from_cache().items())
+    instructions = disassembler.find_uniques_from_cache()
+    # instructions = [("IMAD_R_R_I_R", instructions["IMAD_R_R_I_R"])]
+    instructions = list(instructions.items())
 
     result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
     print("Found", len(instructions), "instructions")
-    for key, inst in instructions[:250]:
+    instructions = sorted(instructions, key=lambda x: x[0])
+    for key, inst in instructions:
         print("Analyzing", key)
-        html, ranges = analysis_pipeline(inst, disassembler)
+        html, ranges = analyse_and_generate_html(inst, disassembler)
         result += html
 
     with open("isa.html", "w") as file:
         file.write(result)
-
     disassembler.dump_cache("disasm_cache.txt")
+    print(
+        "Detected",
+        problem_modi_instructions,
+        "problematic instructions of out",
+        len(instructions),
+    )
     """
     distilled = distill_instruction_reverse(distilled, "SM90a")
     # analyze_instruction(distilled)
