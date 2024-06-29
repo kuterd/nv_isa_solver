@@ -84,11 +84,18 @@ class EncodingRanges:
         self,
         ranges,
         inst,
-        disassembler,
     ):
         self.ranges = ranges
-        self.disassembler = disassembler
         self.inst = inst
+
+    def to_json(self):
+        return json.dumps(self.__dict__)
+
+    @classmethod
+    def from_json(cls, json_str):
+        json_dict = json.loads(json_str)
+        ranges = [EncodingRange.from_json(rng) for rng in json_dict["ranges"]]
+        return cls(ranges, json_dict["inst"])
 
     def _count(self, type):
         result = 0
@@ -132,7 +139,7 @@ class EncodingRanges:
             set_bit_range2(result, range.start, range.start + range.length, value)
         return result
 
-    def enumerate_modifiers(self, disassembler):
+    def enumerate_modifiers(self, disassembler, initial_values=None):
         modifiers = self._find(EncodingRangeType.MODIFIER)
         operand_values = [0] * self.operand_count()
 
@@ -140,12 +147,14 @@ class EncodingRanges:
 
         for i, modifier in enumerate(modifiers):
             insts = []
-            seen = set()
             for modi_i in range(2**modifier.length):
-                modi_values = [
-                    get_bit_range2(self.inst, rng.start, rng.start + rng.length)
-                    for rng in modifiers
-                ]
+                if initial_values:
+                    modi_values = list(initial_values)
+                else:
+                    modi_values = [
+                        get_bit_range2(self.inst, rng.start, rng.start + rng.length)
+                        for rng in modifiers
+                    ]
                 modi_values[i] = modi_i
                 insts.append(self.encode(operand_values, modi_values))
             disasms = disassembler.disassemble_parallel(insts)
@@ -159,7 +168,7 @@ class EncodingRanges:
                     continue
                 name = analyze_modifiers_enumerate(comp_modis, asm_modis)
                 # name = ".".join(asm_modis)
-                analysis_result[-1].append((bin(i)[2:].zfill(modifier.length), name))
+                analysis_result[-1].append((i, name))
                 comp = asm
         return analysis_result
 
@@ -199,7 +208,7 @@ class EncodingRanges:
                 )
                 # name = ".".join(asm_modis)
                 comp = asm
-                current.append((bin(i)[2:].zfill(modifier.length), name))
+                current.append((i, name))
         return result
 
     def generate_html_table(self):
@@ -938,6 +947,108 @@ class InstructionDescGenerator:
         self.end_section()
 
 
+def generate_modifier_table(title, modifiers, rng):
+    html_result = "<p>" + title
+    builder = table_utils.TableBuilder()
+    builder.tbody_start()
+    for row in modifiers:
+        builder.tr_start()
+        builder.push(bin(row[0])[2:].zfill(rng.length))
+        builder.push(row[1])
+        builder.tr_end()
+    builder.tbody_end()
+    builder.end()
+
+    html_result += builder.result + "</p>"
+    return html_result
+
+
+def counter_remove_zeros(counts):
+    for name, count in list(counts.items()):
+        if count == 0:
+            del counts[name]
+
+
+class InstructionSpec:
+    """
+    An instruction specification.
+    """
+
+    def __init__(self, parsed, ranges, modifiers, operand_modifiers):
+        self.parsed = parsed
+        self.ranges = ranges
+        self.modifiers = modifiers
+        self.operand_modifiers = operand_modifiers
+
+        self.empty_value = []
+        self.all_modifiers = []
+        for i, modifier_range in enumerate(modifiers):
+            for value, name in modifier_range:
+                self.all_modifiers.append((name[:-1], i, value))
+
+    def get_modifier_values(self, modifiers):
+        # Greedy algorithm for choosing the correct modifier values.
+        result = {}
+        counts = Counter(modifiers)
+
+        def score_match(modifier_group):
+            _counts = Counter(counts)
+            match = True
+            for modifier in modifier_group:
+                if len(modifier) == 0:
+                    continue
+                if modifier not in counts:
+                    match = False
+                    break
+            if not match:
+                return 0
+            for modifier in modifier_group:
+                _counts[modifier] -= 1
+                counter_remove_zeros(_counts)
+            score = len(counts) - len(_counts)
+            print(score)
+            return score
+
+        change = True
+        while len(counts) != 0 and change:
+            change = False
+            best_i = -1
+            best_value = -1
+            best_modi_group = None
+            best_match = 0
+            for modifier_group, i, value in self.all_modifiers:
+                if i in result:
+                    continue
+                modifier_group = [
+                    operand
+                    for operand in modifier_group.split(".")
+                    if len(operand) != 0
+                ]
+                score = score_match(modifier_group)
+                if score > best_match:
+                    best_i = i
+                    best_value = value
+                    best_match = score
+                    best_modi_group = modifier_group
+            if best_match != 0:
+                change = True
+                result[best_i] = best_value
+                for modifier in best_modi_group:
+                    counts[modifier] -= 1
+                    counter_remove_zeros(counts)
+
+        if len(counts) != 0:
+            return None
+
+        for operand_group, i, value in self.all_modifiers:
+            if i in result:
+                continue
+            if len(operand_group) != 0:
+                continue
+            result[i] = value
+        return result
+
+
 class ISADecoder:
     def __init__(self, corpus, disassembler):
         self.corpus = {}
@@ -1052,22 +1163,6 @@ def instruction_analysis_pipeline(inst, disassembler):
     return inst, asm, parsed_inst, ranges
 
 
-def generate_modifier_table(title, modifiers):
-    html_result = "<p>" + title
-    builder = table_utils.TableBuilder()
-    builder.tbody_start()
-    for row in modifiers:
-        builder.tr_start()
-        for cell in row:
-            builder.push(cell)
-        builder.tr_end()
-    builder.tbody_end()
-    builder.end()
-
-    html_result += builder.result + "</p>"
-    return html_result
-
-
 def analyse_and_generate_html(inst, disassembler):
     generator = InstructionDescGenerator()
 
@@ -1078,26 +1173,38 @@ def analyse_and_generate_html(inst, disassembler):
     html_result += f"<p> key: {parsed_inst.get_key()}</p>"
 
     html_result += ranges.generate_html_table()
-    modifiers = ranges.enumerate_modifiers(disassembler)
-    for i, rows in enumerate(modifiers):
+    modifier_values = ranges.enumerate_modifiers(disassembler)
+    modifier_ranges = ranges._find(EncodingRangeType.MODIFIER)
+    for i, rows in enumerate(modifier_values):
         title = f"Modifier Group {i + 1}"
-        html_result += generate_modifier_table(title, rows)
+        html_result += generate_modifier_table(title, rows, modifier_ranges[i])
 
-    operand_modifiers = ranges.enumerate_operand_modifiers(disassembler)
-    for operand, modifiers in operand_modifiers.items():
+    operand_modifier_values = ranges.enumerate_operand_modifiers(disassembler)
+    operand_modifier_ranges = ranges._find(EncodingRangeType.OPERAND_MODIFIER)
+    operand_modifier_ranges = {
+        rng.operand_index: rng for rng in operand_modifier_ranges
+    }
+    for operand, modifiers in operand_modifier_values.items():
         title = f"Operand {operand} operand modifiers"
-        html_result += generate_modifier_table(title, modifiers)
 
-    return html_result, ranges
+        html_result += generate_modifier_table(
+            title, modifiers, operand_modifier_ranges[operand]
+        )
+
+    spec = InstructionSpec(
+        parsed_inst, ranges, modifier_values, operand_modifier_values
+    )
+
+    return html_result, spec
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("--arch", default="SM90a")
-    parser.add_argument("--cache_file", default="disasm_cache.txt")
-    parser.add_argument("--nvdisasm", default="nvdisasm")
-    parser.add_argument("--num_parallel", default=1, type=int)
-    arguments = parser.parse_args()
+    arg_parser = ArgumentParser()
+    arg_parser.add_argument("--arch", default="SM90a")
+    arg_parser.add_argument("--cache_file", default="disasm_cache.txt")
+    arg_parser.add_argument("--nvdisasm", default="nvdisasm")
+    arg_parser.add_argument("--num_parallel", default=1, type=int)
+    arguments = arg_parser.parse_args()
 
     disassembler = Disassembler(arguments.arch, nvdisasm=arguments.nvdisasm)
     disassembler.load_cache(arguments.cache_file)
@@ -1108,8 +1215,9 @@ if __name__ == "__main__":
 
     result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
     print("Found", len(instructions), "instructions")
-    instructions = sorted(instructions, key=lambda x: x[0])
+    instructions = sorted(instructions, key=lambda x: x[0])[:20]
 
+    analysis_result = {}
     with futures.ThreadPoolExecutor(max_workers=arguments.num_parallel) as executor:
         instruction_futures = {}
         for key, inst in instructions:
@@ -1117,7 +1225,10 @@ if __name__ == "__main__":
             instruction_futures[key] = future
 
         for key, inst in instructions:
-            result += future.result()[0]
+            print("waiting for", key)
+            html, spec = instruction_futures[key].result()
+            result += html
+            analysis_result[key] = spec
 
     with open("isa.html", "w") as file:
         file.write(result)
