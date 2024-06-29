@@ -41,11 +41,11 @@ class EncodingRangeType(str, Enum):
 
     # Control code stuff.
     STALL_CYCLES = "stall"
-    YIELD_FLAG = "yield_flag"
-    READ_BARRIER = "read_barrier"
-    WRITE_BARRIER = "write_barrier"
-    BARRIER_MASK = "barrier_mask"
-    REUSE_MASK = "reuse_mask"
+    YIELD_FLAG = "y"
+    READ_BARRIER = "r-bar"
+    WRITE_BARRIER = "w-bar"
+    BARRIER_MASK = "b-mask"
+    REUSE_MASK = "reuse"
 
 
 class EncodingRange:
@@ -132,7 +132,7 @@ class EncodingRanges:
             set_bit_range2(result, range.start, range.start + range.length, value)
         return result
 
-    def enumerate_modifiers(self):
+    def enumerate_modifiers(self, disassembler):
         modifiers = self._find(EncodingRangeType.MODIFIER)
         operand_values = [0] * self.operand_count()
 
@@ -148,7 +148,7 @@ class EncodingRanges:
                 ]
                 modi_values[i] = modi_i
                 insts.append(self.encode(operand_values, modi_values))
-            disasms = self.disassembler.disassemble_parallel(insts)
+            disasms = disassembler.disassemble_parallel(insts)
             analysis_result.append([])
             comp = disasms[1]
             for i, asm in enumerate(disasms):
@@ -163,7 +163,7 @@ class EncodingRanges:
                 comp = asm
         return analysis_result
 
-    def enumerate_operand_modifiers(self):
+    def enumerate_operand_modifiers(self, disassembler):
         operand_modifiers = self._find(EncodingRangeType.OPERAND_MODIFIER)
         modifiers = self._find(EncodingRangeType.MODIFIER)
         result = {}
@@ -179,7 +179,7 @@ class EncodingRanges:
                 operand_modis = {}
                 operand_modis[modifier.operand_index] = modi_i
                 insts.append(self.encode(operand_values, modi_values, operand_modis))
-            disasms = self.disassembler.disassemble_parallel(insts)
+            disasms = disassembler.disassemble_parallel(insts)
             current = []
             result[modifier.operand_index] = current
             comp = disasms[1]
@@ -497,10 +497,25 @@ class InstructionMutationSet:
                         operand_index=operand_index,
                     )
 
-            # Handle constant
+            if new_range is None:
+                control_code_ranges = [
+                    (EncodingRangeType.REUSE_MASK, 4),
+                    (EncodingRangeType.BARRIER_MASK, 6),
+                    (EncodingRangeType.WRITE_BARRIER, 3),
+                    (EncodingRangeType.READ_BARRIER, 3),
+                    (EncodingRangeType.YIELD_FLAG, 1),
+                    (EncodingRangeType.STALL_CYCLES, 4),
+                ]
+
+                offset = 13 * 8 + 1
+                for rtype, length in control_code_ranges:
+                    if i >= offset and i < offset + length:
+                        new_range = EncodingRange(rtype, i, 1)
+                        break
+                    offset += length
+
             if new_range is None:
                 new_range = EncodingRange(EncodingRangeType.CONSTANT, i, 1, constant=0)
-
             # Decide if we should extend the current range or not.
             if (
                 current_range
@@ -525,7 +540,7 @@ class InstructionMutationSet:
 
         _push()
 
-        return EncodingRanges(result, self.inst, self.disassembler)
+        return EncodingRanges(result, self.inst)
 
 
 def set_bit(array, i):
@@ -1063,12 +1078,12 @@ def analyse_and_generate_html(inst, disassembler):
     html_result += f"<p> key: {parsed_inst.get_key()}</p>"
 
     html_result += ranges.generate_html_table()
-    modifiers = ranges.enumerate_modifiers()
+    modifiers = ranges.enumerate_modifiers(disassembler)
     for i, rows in enumerate(modifiers):
         title = f"Modifier Group {i + 1}"
         html_result += generate_modifier_table(title, rows)
 
-    operand_modifiers = ranges.enumerate_operand_modifiers()
+    operand_modifiers = ranges.enumerate_operand_modifiers(disassembler)
     for operand, modifiers in operand_modifiers.items():
         title = f"Operand {operand} operand modifiers"
         html_result += generate_modifier_table(title, modifiers)
