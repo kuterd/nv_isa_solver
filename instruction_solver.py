@@ -1250,4 +1250,4 @@ if __name__ == "__main__":
     print(analysis_result["ATOMG_P_R_RI_R"].parsed.to_json())
     with open("isa.html", "w") as file:
         file.write(result)
-    disassembler.dump_cache("disasm_cache.txt")
+    disassembler.dump_cache(arguments.cache_file)

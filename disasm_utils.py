@@ -32,6 +32,7 @@ class Disassembler:
                     asm, inst = line.split("---")
                     self.cache[bytes.fromhex(inst.strip())] = asm.strip()
         except FileNotFoundError:
+            print("Cache could not be loaded")
             pass
 
     def dump_cache(self, filename):
