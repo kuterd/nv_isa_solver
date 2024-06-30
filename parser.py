@@ -6,6 +6,7 @@ TODO:
 
 """
 
+import json
 from typing import Union
 import re
 from enum import Enum
@@ -213,6 +214,14 @@ class RegOperand(Operand):
     def compare(self, other):
         return self.ident == other.ident
 
+    def to_json_obj(self):
+        return {
+            "type": type(self).__name__,
+            "reg_type": self.reg_type,
+            "ident": self.ident,
+            "modifiers": self.modifiers,
+        }
+
 
 class AttributeOperand(Operand):
     def __init__(self, address):
@@ -223,6 +232,12 @@ class AttributeOperand(Operand):
 
     def get_operand_key(self):
         return f"a[{self.sub_operands[0].get_operand_key()}]"
+
+    def to_json_obj(self):
+        return {
+            "type": type(self).__name__,
+            "sub_operands": [op.to_json_obj() for op in self.sub_operands],
+        }
 
 
 class AddressOperand(Operand):
@@ -242,6 +257,12 @@ class AddressOperand(Operand):
             pass
         return result
 
+    def to_json_obj(self):
+        return {
+            "type": type(self).__name__,
+            "sub_operands": [op.to_json_obj() for op in self.sub_operands],
+        }
+
 
 class IntIMMOperand(Operand):
     def __init__(self, constant):
@@ -256,6 +277,9 @@ class IntIMMOperand(Operand):
 
     def compare(self, other):
         return self.constant == other.constant
+
+    def to_json_obj(self):
+        return {"type": type(self).__name__, "constant": self.constant}
 
 
 class FloatIMMOperand(Operand):
@@ -272,6 +296,9 @@ class FloatIMMOperand(Operand):
     def compare(self, other):
         return self.constant == other.constant
 
+    def to_json_obj(self):
+        return {"type": type(self).__name__, "constant": self.constant}
+
 
 class ConstantMemOperand(Operand):
     def __init__(self, bank, address, cx=False):
@@ -287,6 +314,13 @@ class ConstantMemOperand(Operand):
     def __repr__(self):
         prefix = "cx" if self.cx else "c"
         return f"{prefix}[{repr(self.sub_operands[0])}]{repr(self.sub_operands[1])}"
+
+    def to_json_obj(self):
+        return {
+            "type": type(self).__name__,
+            "cx": self.cx,
+            "sub_operands": [op.to_json_obj() for op in self.sub_operands],
+        }
 
 
 class DescOperand(Operand):
@@ -306,6 +340,13 @@ class DescOperand(Operand):
         return (
             prefix + f"desc[{repr(self.sub_operands[0])}]{repr(self.sub_operands[1])}"
         )
+
+    def to_json_obj(self):
+        return {
+            "type": type(self).__name__,
+            "g": self.h,
+            "sub_operands": [op.to_json_obj() for op in self.sub_operands],
+        }
 
 
 class Instruction:
@@ -330,6 +371,17 @@ class Instruction:
             result += operand.flatten()
 
         return result
+
+    def to_json_obj(self):
+        return {
+            "base_name": self.base_name,
+            "modifiers": self.modifiers,
+            "predicate": self.predicate,
+            "operands": [op.to_json_obj() for op in self.operands],
+        }
+
+    def to_json(self):
+        return json.dumps(self.to_json_obj())
 
 
 def stripComments(s):

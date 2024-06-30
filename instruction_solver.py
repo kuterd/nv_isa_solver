@@ -67,6 +67,9 @@ class EncodingRange:
         self.name = name
         self.constant = constant
 
+    def to_json_obj(self):
+        return self.__dict__
+
     def to_json(self):
         return json.dumps(self.__dict__)
 
@@ -88,8 +91,12 @@ class EncodingRanges:
         self.ranges = ranges
         self.inst = inst
 
+    def to_json_obj(self):
+        ranges = [rng.to_json_obj() for rng in self.ranges]
+        return {"ranges": ranges, "inst": self.inst.hex()}
+
     def to_json(self):
-        return json.dumps(self.__dict__)
+        return json.dumps(self.to_json_obj())
 
     @classmethod
     def from_json(cls, json_str):
@@ -986,6 +993,17 @@ class InstructionSpec:
             for value, name in modifier_range:
                 self.all_modifiers.append((name[:-1], i, value))
 
+    def to_json_obj(self):
+        return {
+            "parsed": self.parsed.to_json_obj(),
+            "ranges": self.ranges.to_json_obj(),
+            "modifiers": self.modifiers,
+            "operand_modifiers": self.operand_modifiers,
+        }
+
+    def to_json(self):
+        return json.dumps(self.to_json_obj())
+
     def get_modifier_values(self, modifiers):
         # Greedy algorithm for choosing the correct modifier values.
         result = {}
@@ -1229,7 +1247,7 @@ if __name__ == "__main__":
             html, spec = instruction_futures[key].result()
             result += html
             analysis_result[key] = spec
-
+    print(analysis_result["ATOMG_P_R_RI_R"].parsed.to_json())
     with open("isa.html", "w") as file:
         file.write(result)
     disassembler.dump_cache("disasm_cache.txt")
