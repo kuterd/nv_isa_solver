@@ -1024,7 +1024,6 @@ class InstructionSpec:
                 _counts[modifier] -= 1
                 counter_remove_zeros(_counts)
             score = len(counts) - len(_counts)
-            print(score)
             return score
 
         change = True
@@ -1065,6 +1064,34 @@ class InstructionSpec:
                 continue
             result[i] = value
         return result
+
+    def get_minimal_modifiers(self):
+        modifiers = []
+        for modi_group in self.modifiers:
+            if "" in [modi[1] for modi in modi_group]:
+                continue
+            modifiers.append(modi_group[0][1][:-1])
+        return modifiers
+
+    def encode_for_life_range(self, modifiers=[]):
+        operands = self.parsed.get_flat_operands()
+        operand_values = [0] * len(operands)
+        reg_count = 0
+        ureg_count = 0
+        pred_count = 1
+        modifiers = self.get_modifier_values(modifiers)
+        for i, operand in enumerate(operands):
+            if isinstance(operand, parser.RegOperand):
+                if operand.reg_type == "R":
+                    operand_values[i] = reg_count * 16 + 16
+                    reg_count += 1
+                elif operand.reg_type == "P":
+                    operand_values[i] = pred_count
+                    pred_count += 1
+                elif operand.reg_type == "UR":
+                    operand_values[i] = ureg_count * 4
+                    ureg_count += 1
+        return self.ranges.encode(operand_values, modifiers)
 
 
 class ISADecoder:
@@ -1216,24 +1243,30 @@ def analyse_and_generate_html(inst, disassembler):
     return html_result, spec
 
 
+import sys
+
+sys.path.append("life_range")
+from life_range import analyse_inst
+
 if __name__ == "__main__":
     arg_parser = ArgumentParser()
     arg_parser.add_argument("--arch", default="SM90a")
     arg_parser.add_argument("--cache_file", default="disasm_cache.txt")
     arg_parser.add_argument("--nvdisasm", default="nvdisasm")
-    arg_parser.add_argument("--num_parallel", default=1, type=int)
+    arg_parser.add_argument("--num_parallel", default=5, type=int)
     arguments = arg_parser.parse_args()
 
     disassembler = Disassembler(arguments.arch, nvdisasm=arguments.nvdisasm)
     disassembler.load_cache(arguments.cache_file)
 
+    # TODO: Run to fixpoint!
     instructions = disassembler.find_uniques_from_cache()
     # instructions = [("IMAD_R_R_I_R", instructions["IMAD_R_R_I_R"])]
     instructions = list(instructions.items())
 
     result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
     print("Found", len(instructions), "instructions")
-    instructions = sorted(instructions, key=lambda x: x[0])[:20]
+    instructions = sorted(instructions, key=lambda x: x[0])
 
     analysis_result = {}
     with futures.ThreadPoolExecutor(max_workers=arguments.num_parallel) as executor:
@@ -1247,7 +1280,14 @@ if __name__ == "__main__":
             html, spec = instruction_futures[key].result()
             result += html
             analysis_result[key] = spec
-    print(analysis_result["ATOMG_P_R_RI_R"].parsed.to_json())
+    """
+    test_spec = analysis_result["DSETP_P_P_R_FI_P"]
+    minimal_modi = test_spec.get_minimal_modifiers()
+    print(minimal_modi)
+    inst = test_spec.encode_for_life_range(minimal_modi)
+    print(disassembler.disassemble(inst))
+    print(analyse_inst(inst))
+    """
     with open("isa.html", "w") as file:
         file.write(result)
     disassembler.dump_cache(arguments.cache_file)
