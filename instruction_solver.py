@@ -1290,13 +1290,13 @@ if __name__ == "__main__":
     disassembler.load_cache(arguments.cache_file)
 
     analysis_result = {}
+    result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
     while True:
         instructions = disassembler.find_uniques_from_cache()
         instructions = list(instructions.items())
         instructions = [
             (key, inst) for key, inst in instructions if key not in analysis_result
         ]
-        result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
         if len(instructions) == 0:
             print("No new instruction found, exiting")
             break
