@@ -1093,6 +1093,34 @@ class InstructionSpec:
                     ureg_count += 1
         return self.ranges.encode(operand_values, modifiers)
 
+    def generate_html(self):
+        """
+        Generate html for this instruction.
+        """
+        desc_generator = InstructionDescGenerator()
+        html_result = desc_generator.generate(self.parsed)
+        # html_result += f"<p> distilled: {asm}</p>"
+        html_result += f"<p> key: {self.parsed.get_key()}</p>"
+        html_result += self.ranges.generate_html_table()
+
+        modifier_ranges = self.ranges._find(EncodingRangeType.MODIFIER)
+        for i, rows in enumerate(self.modifiers):
+            title = f"Modifier Group {i + 1}"
+            html_result += generate_modifier_table(title, rows, modifier_ranges[i])
+
+        operand_modifier_ranges = self.ranges._find(EncodingRangeType.OPERAND_MODIFIER)
+        operand_modifier_ranges = {
+            rng.operand_index: rng for rng in operand_modifier_ranges
+        }
+
+        for operand, modifiers in self.operand_modifiers.items():
+            title = f"Operand {operand} operand modifiers"
+
+            html_result += generate_modifier_table(
+                title, modifiers, operand_modifier_ranges[operand]
+            )
+        return html_result
+
 
 class ISADecoder:
     def __init__(self, corpus, disassembler):
@@ -1205,12 +1233,18 @@ def instruction_analysis_pipeline(inst, disassembler):
     analysis_run_fixedpoint(disassembler, mutation_set, analysis_modifier_splitting)
     ranges = mutation_set.compute_encoding_ranges()
 
-    return inst, asm, parsed_inst, ranges
+    modifier_values = ranges.enumerate_modifiers(disassembler)
+
+    operand_modifier_values = ranges.enumerate_operand_modifiers(disassembler)
+    spec = InstructionSpec(
+        parsed_inst, ranges, modifier_values, operand_modifier_values
+    )
+
+    return spec
 
 
+"""
 def analyse_and_generate_html(inst, disassembler):
-    generator = InstructionDescGenerator()
-
     inst, asm, parsed_inst, ranges = instruction_analysis_pipeline(inst, disassembler)
 
     html_result = generator.generate(parsed_inst)
@@ -1226,9 +1260,6 @@ def analyse_and_generate_html(inst, disassembler):
 
     operand_modifier_values = ranges.enumerate_operand_modifiers(disassembler)
     operand_modifier_ranges = ranges._find(EncodingRangeType.OPERAND_MODIFIER)
-    operand_modifier_ranges = {
-        rng.operand_index: rng for rng in operand_modifier_ranges
-    }
     for operand, modifiers in operand_modifier_values.items():
         title = f"Operand {operand} operand modifiers"
 
@@ -1241,8 +1272,7 @@ def analyse_and_generate_html(inst, disassembler):
     )
 
     return html_result, spec
-
-
+"""
 import sys
 
 sys.path.append("life_range")
@@ -1259,35 +1289,37 @@ if __name__ == "__main__":
     disassembler = Disassembler(arguments.arch, nvdisasm=arguments.nvdisasm)
     disassembler.load_cache(arguments.cache_file)
 
-    # TODO: Run to fixpoint!
-    instructions = disassembler.find_uniques_from_cache()
-    # instructions = [("IMAD_R_R_I_R", instructions["IMAD_R_R_I_R"])]
-    instructions = list(instructions.items())
-
-    result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
-    print("Found", len(instructions), "instructions")
-    instructions = sorted(instructions, key=lambda x: x[0])
-
     analysis_result = {}
-    with futures.ThreadPoolExecutor(max_workers=arguments.num_parallel) as executor:
-        instruction_futures = {}
-        for key, inst in instructions:
-            future = executor.submit(analyse_and_generate_html, inst, disassembler)
-            instruction_futures[key] = future
+    while True:
+        instructions = disassembler.find_uniques_from_cache()
+        instructions = list(instructions.items())
+        instructions = [
+            (key, inst) for key, inst in instructions if key not in analysis_result
+        ]
+        result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
+        if len(instructions) == 0:
+            print("No new instruction found, exiting")
+            break
 
-        for key, inst in instructions:
-            print("waiting for", key)
-            html, spec = instruction_futures[key].result()
-            result += html
-            analysis_result[key] = spec
-    """
-    test_spec = analysis_result["DSETP_P_P_R_FI_P"]
-    minimal_modi = test_spec.get_minimal_modifiers()
-    print(minimal_modi)
-    inst = test_spec.encode_for_life_range(minimal_modi)
-    print(disassembler.disassemble(inst))
-    print(analyse_inst(inst))
-    """
+        print("Found", len(instructions), "instructions")
+
+        with futures.ThreadPoolExecutor(max_workers=arguments.num_parallel) as executor:
+            instruction_futures = {}
+            for key, inst in instructions:
+                future = executor.submit(
+                    instruction_analysis_pipeline, inst, disassembler
+                )
+                instruction_futures[key] = future
+
+            for key, inst in instructions:
+                spec = instruction_futures[key].result()
+                analysis_result[key] = spec
+
+    analysis_result = sorted(list(analysis_result.items()), key=lambda x: x[0])
+
+    for key, spec in analysis_result:
+        result += spec.generate_html()
+
     with open("isa.html", "w") as file:
         file.write(result)
     disassembler.dump_cache(arguments.cache_file)
