@@ -147,36 +147,56 @@ class EncodingRanges:
         return result
 
     def enumerate_modifiers(self, disassembler, initial_values=None):
+        # NOTE: Enumerating with invalid modifiers in the instruction might be
+        #      causing problems for us!
+
         modifiers = self._find(EncodingRangeType.MODIFIER)
         operand_values = [0] * self.operand_count()
 
         analysis_result = []
+        if initial_values:
+            _modi_values = list(initial_values)
+        else:
+            _modi_values = [
+                get_bit_range2(self.inst, rng.start, rng.start + rng.length)
+                for rng in modifiers
+            ]
 
-        for i, modifier in enumerate(modifiers):
+        for modifier_i, modifier in enumerate(modifiers):
             insts = []
-            for modi_i in range(2**modifier.length):
-                if initial_values:
-                    modi_values = list(initial_values)
-                else:
-                    modi_values = [
-                        get_bit_range2(self.inst, rng.start, rng.start + rng.length)
-                        for rng in modifiers
-                    ]
-                modi_values[i] = modi_i
+            for modi_val in range(2**modifier.length):
+                modi_values = list(_modi_values)
+                modi_values[modifier_i] = modi_val
                 insts.append(self.encode(operand_values, modi_values))
             disasms = disassembler.disassemble_parallel(insts)
             analysis_result.append([])
             comp = disasms[1]
+
+            replace_original = False
             for i, asm in enumerate(disasms):
                 try:
                     comp_modis = InstructionParser.parseInstruction(comp).modifiers
                     asm_modis = InstructionParser.parseInstruction(asm).modifiers
                 except Exception:
                     continue
+                # FIXME: This doesn't work for some instructions with invalid modifiers!
                 name = analyze_modifiers_enumerate(comp_modis, asm_modis)
-                # name = ".".join(asm_modis)
+                # Replace the modifier value if the default value fuzzing found for this modifier is invalid.
+                if (
+                    name.startswith("INVALID") or name.startswith("???")
+                ) and i == get_bit_range2(
+                    self.inst, modifier.start, modifier.start + modifier.length
+                ):
+                    replace_original = True
                 analysis_result[-1].append((i, name))
-                comp = asm
+                comp = disasms[0]
+            if replace_original:
+                for val, name in analysis_result[-1]:
+                    # NOTE: Hopefully this will help with enumeration.
+                    if "INVALID" not in name and "???" not in name:
+                        _modi_values[modifier_i] = val
+                        break
+
         return analysis_result
 
     def enumerate_operand_modifiers(self, disassembler):
@@ -981,7 +1001,8 @@ class InstructionSpec:
     An instruction specification.
     """
 
-    def __init__(self, parsed, ranges, modifiers, operand_modifiers):
+    def __init__(self, disasm, parsed, ranges, modifiers, operand_modifiers):
+        self.disasm = disasm
         self.parsed = parsed
         self.ranges = ranges
         self.modifiers = modifiers
@@ -1099,7 +1120,7 @@ class InstructionSpec:
         """
         desc_generator = InstructionDescGenerator()
         html_result = desc_generator.generate(self.parsed)
-        # html_result += f"<p> distilled: {asm}</p>"
+        html_result += f"<p> distilled: {self.disasm}</p>"
         html_result += f"<p> key: {self.parsed.get_key()}</p>"
         html_result += self.ranges.generate_html_table()
 
@@ -1237,42 +1258,12 @@ def instruction_analysis_pipeline(inst, disassembler):
 
     operand_modifier_values = ranges.enumerate_operand_modifiers(disassembler)
     spec = InstructionSpec(
-        parsed_inst, ranges, modifier_values, operand_modifier_values
+        asm, parsed_inst, ranges, modifier_values, operand_modifier_values
     )
 
     return spec
 
 
-"""
-def analyse_and_generate_html(inst, disassembler):
-    inst, asm, parsed_inst, ranges = instruction_analysis_pipeline(inst, disassembler)
-
-    html_result = generator.generate(parsed_inst)
-    html_result += f"<p> distilled: {asm}</p>"
-    html_result += f"<p> key: {parsed_inst.get_key()}</p>"
-
-    html_result += ranges.generate_html_table()
-    modifier_values = ranges.enumerate_modifiers(disassembler)
-    modifier_ranges = ranges._find(EncodingRangeType.MODIFIER)
-    for i, rows in enumerate(modifier_values):
-        title = f"Modifier Group {i + 1}"
-        html_result += generate_modifier_table(title, rows, modifier_ranges[i])
-
-    operand_modifier_values = ranges.enumerate_operand_modifiers(disassembler)
-    operand_modifier_ranges = ranges._find(EncodingRangeType.OPERAND_MODIFIER)
-    for operand, modifiers in operand_modifier_values.items():
-        title = f"Operand {operand} operand modifiers"
-
-        html_result += generate_modifier_table(
-            title, modifiers, operand_modifier_ranges[operand]
-        )
-
-    spec = InstructionSpec(
-        parsed_inst, ranges, modifier_values, operand_modifier_values
-    )
-
-    return html_result, spec
-"""
 import sys
 
 sys.path.append("life_range")
