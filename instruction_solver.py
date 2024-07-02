@@ -8,7 +8,7 @@ from collections import Counter
 from disasm_utils import Disassembler, set_bit_range2, get_bit_range2
 import table_utils
 import parser
-from parser import InstructionParser
+from parser import InstructionParser, Instruction
 from concurrent import futures
 from argparse import ArgumentParser
 
@@ -51,7 +51,7 @@ class EncodingRangeType(str, Enum):
 class EncodingRange:
     def __init__(
         self,
-        _type,
+        type,
         start,
         length,
         operand_index=None,
@@ -59,7 +59,7 @@ class EncodingRange:
         constant=None,
         group_id=None,
     ):
-        self.type = _type
+        self.type = type
         self.start = start
         self.length = length
         self.operand_index = operand_index
@@ -77,6 +77,10 @@ class EncodingRange:
     def from_json(cls, json_str):
         json_dict = json.loads(json_str)
         return cls(**json_dict)
+
+    @classmethod
+    def from_json_obj(cls, obj):
+        return cls(**obj)
 
     def __repr__(self):
         return self.to_json()
@@ -99,10 +103,13 @@ class EncodingRanges:
         return json.dumps(self.to_json_obj())
 
     @classmethod
+    def from_json_obj(cls, obj):
+        ranges = [EncodingRange.from_json_obj(rng) for rng in obj["ranges"]]
+        return cls(ranges, bytes.fromhex(obj["inst"]))
+
+    @classmethod
     def from_json(cls, json_str):
-        json_dict = json.loads(json_str)
-        ranges = [EncodingRange.from_json(rng) for rng in json_dict["ranges"]]
-        return cls(ranges, json_dict["inst"])
+        return EncodingRanges.from_json_obj(json.loads(json_str))
 
     def _count(self, type):
         result = 0
@@ -1016,6 +1023,7 @@ class InstructionSpec:
 
     def to_json_obj(self):
         return {
+            "disasm": self.disasm,
             "parsed": self.parsed.to_json_obj(),
             "ranges": self.ranges.to_json_obj(),
             "modifiers": self.modifiers,
@@ -1024,6 +1032,20 @@ class InstructionSpec:
 
     def to_json(self):
         return json.dumps(self.to_json_obj())
+
+    @classmethod
+    def from_json_obj(cls, obj):
+        return cls(
+            obj["disasm"],
+            Instruction.from_json_obj(obj["parsed"]),
+            EncodingRanges.from_json_obj(obj["ranges"]),
+            obj["modifiers"],
+            obj["operand_modifiers"],
+        )
+
+    @classmethod
+    def from_json(cls, json_str):
+        return InstructionSpec.from_json_obj(json.loads(json_str))
 
     def get_modifier_values(self, modifiers):
         # Greedy algorithm for choosing the correct modifier values.
