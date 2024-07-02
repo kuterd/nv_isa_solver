@@ -740,6 +740,10 @@ def analysis_extend_modifiers(
 
     def analyse_adj(modi_bit, adj):
         nonlocal changed
+        # NOTE: I am not 100% sure about this. Maybe we can remove this once
+        #       we have post enumeration modifier splitting?
+        if adj in mset.instruction_modifier_bit_flag:
+            return
 
         array = bytearray(mset.inst)
         set_bit(array, modi_bit)
