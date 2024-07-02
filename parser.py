@@ -50,31 +50,26 @@ p_ConstTrDict = {
     r"\bQNAN\b": "NAN",
 }
 
-# Functions that have position dependent modifiers, such as F2F.F16.F32 != F2F.F32.F16
-c_PosDepFuncs = set(
+p_RImmeAddr = re.compile(r"(?P<R>R\d+)\s*(?P<II>-?0x[0-9a-fA-F]+)")
+
+c_AddrFuncs = set(
     [
-        "I2I",
-        "F2F",
-        "IDP",
-        "HMMA",
-        "IMMA",
-        "XMAD",
-        "IMAD",
-        "IMADSP",
-        "VADD",
-        "VMAD",
-        "VSHL",
-        "VSHR",
-        "VSET",
-        "VSETP",
-        "VMNMX",
-        "VABSDIFF",
-        "VABSDIFF4",
-        "TLD4",
-        "PSET",
-        "PSETP",
+        "BRA",
+        "BRX",
+        "BRXU",
+        "CALL",
+        "JMP",
+        "JMX",
+        "JMXU",
+        "RET",
+        "BSSY",
+        "SSY",
+        "CAL",
+        "PRET",
+        "PBK",
     ]
 )
+
 
 c_ModiDTypes = set(
     [
@@ -388,7 +383,7 @@ class DescOperand(Operand):
     def to_json_obj(self):
         return {
             "type": type(self).__name__,
-            "g": self.h,
+            "g": self.g,
             "sub_operands": [op.to_json_obj() for op in self.sub_operands],
         }
 
@@ -633,8 +628,16 @@ class _InstructionParser:
         tokens = op.split(".")
         base_op = tokens[0]
 
+        operands = match.group("Operands").strip()
+        if base_op in c_AddrFuncs:
+            res = p_RImmeAddr.search(operands)
+            if res is not None:
+                operands = operands.replace(
+                    res.group(), res.group("R") + "," + res.group("II")
+                )
+
         # FIXME: This won't handle the DEPBAR instruction.
-        operands = match.group("Operands").strip().split(",")
+        operands = operands.split(",")
         operands = [op for op in operands if len(op) != 0]
 
         operands = [self.parseOperand(operand.strip()) for operand in operands]

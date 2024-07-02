@@ -5,8 +5,6 @@ from parser import InstructionParser
 import os
 import multiprocessing
 
-# DISASM = "/usr/local/cuda-12.5/bin/nvdisasm"
-
 
 def _process_dump(dump):
     lines = dump.split("\n")[1:]
