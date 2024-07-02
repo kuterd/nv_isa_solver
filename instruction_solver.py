@@ -1332,6 +1332,12 @@ if __name__ == "__main__":
                 spec = instruction_futures[key].result()
                 analysis_result[key] = spec
 
+    with open("isa.json", "w") as isa_json_file:
+        analysis_serialized = {
+            key: spec.to_json_obj() for key, spec in analysis_result.items()
+        }
+        isa_json_file.write(json.dumps(analysis_serialized))
+
     analysis_result = sorted(list(analysis_result.items()), key=lambda x: x[0])
 
     for key, spec in analysis_result:
