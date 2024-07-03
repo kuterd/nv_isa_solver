@@ -27,7 +27,7 @@ for i in range(pow(2, 12)):
     for j in range(13, 8 * 13):
         array_ = bytearray(array)
         flip_bit(array_, j)
-        inst.append(array)
+        inst.append(array_)
 
 disassembler.disassemble_parallel(inst, arguments.arch)
 disassembler.dump_cache(arguments.cache_file)
