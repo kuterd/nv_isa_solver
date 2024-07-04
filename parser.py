@@ -565,7 +565,7 @@ class _InstructionParser:
         address = match.group("Addr")
         if address:
             address = self._parseAddress(address)
-        return DescOperand(reg, address, g=False)
+        return DescOperand(reg, address, g=s.startswith("gdesc"))
 
     def parseOperand(self, op_full):
         op, modi = self.parseOperandAtom(op_full)
@@ -642,6 +642,9 @@ class _InstructionParser:
             raise ValueError(f"Couldn't parse {instruction}")
 
         pred_string = match.group("Pred")
+        if pred_string is not None:
+            pred_string = pred_string.strip()
+
         op = match.group("Op")
         tokens = op.split(".")
         base_op = tokens[0]
