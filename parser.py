@@ -129,6 +129,7 @@ p_bracomment = re.compile(r"\(\*.*\*\)")  # notes for bra targets
 # Pattern for matching white spaces
 p_WhiteSpace = re.compile(r"\s+")
 
+p_SwzAdd = re.compile(r"(P|N){8}")
 # Pattern for insignificant spaces, they will be collapsed first, and removed finally
 # Spaces between words([0-9A-Za-z_]) will be kept, others will be removed
 p_InsignificantSpace = re.compile(
@@ -586,17 +587,22 @@ class _InstructionParser:
             return self._parseFloatIMM(op_full)
         elif op.startswith("desc") or op.startswith("gdesc"):
             return self._parseDescAddress(op)
-        elif op in [
-            "COMP_STATUS",
-            "ATEXIT_PC",
-            "TRAP_RETURN_PC",
-            "TRAP_RETURN_MASK",
-            "THREAD_STATE_ENUM",
-            "MCOLLECTIVE",
-            "MEXITED",
-            "TRA_RETURN_MASK",
-            "CUBE",
-        ] or op.startswith("???"):
+        elif (
+            op
+            in [
+                "COMP_STATUS",
+                "ATEXIT_PC",
+                "TRAP_RETURN_PC",
+                "TRAP_RETURN_MASK",
+                "THREAD_STATE_ENUM",
+                "MCOLLECTIVE",
+                "MEXITED",
+                "TRA_RETURN_MASK",
+                "CUBE",
+            ]
+            or op.startswith("???")
+            or op.startswith("INVALID")
+        ):
             result = RegOperand("SNOWFLAKE", op)
         elif op.startswith("TEX_"):
             result = RegOperand("TEX", op[4:])
@@ -606,6 +612,10 @@ class _InstructionParser:
             result = RegOperand("PC", None)
         elif op == "PR":
             result = RegOperand("P", "R")
+        elif p_SwzAdd.match(op):
+            result = RegOperand("SwzAdd", op)
+        elif op == "UPR":
+            result = RegOperand("UP", "R")
         elif op.startswith("INVALID"):
             result = RegOperand("SR", op)
         elif op in ["1D", "2D", "3D", "4D"]:
