@@ -1029,7 +1029,15 @@ class InstructionSpec:
     An instruction specification.
     """
 
-    def __init__(self, disasm, parsed, ranges, modifiers, operand_modifiers):
+    def __init__(
+        self,
+        disasm,
+        parsed,
+        ranges,
+        modifiers,
+        operand_modifiers,
+        operand_interactions=None,
+    ):
         self.disasm = disasm
         self.parsed = parsed
         self.ranges = ranges
@@ -1050,6 +1058,7 @@ class InstructionSpec:
             "ranges": self.ranges.to_json_obj(),
             "modifiers": self.modifiers,
             "operand_modifiers": self.operand_modifiers,
+            "operand_interactions": self.operand_interactions,
         }
 
     def to_json(self):
@@ -1063,6 +1072,7 @@ class InstructionSpec:
             EncodingRanges.from_json_obj(obj["ranges"]),
             obj["modifiers"],
             obj["operand_modifiers"],
+            operand_interactions=obj["operand_interactions"],
         )
 
     @classmethod
