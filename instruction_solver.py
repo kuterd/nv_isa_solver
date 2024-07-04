@@ -542,17 +542,21 @@ class InstructionMutationSet:
 
             if new_range is None:
                 control_code_ranges = [
-                    (EncodingRangeType.REUSE_MASK, 4),
-                    (EncodingRangeType.BARRIER_MASK, 6),
-                    (EncodingRangeType.WRITE_BARRIER, 3),
-                    (EncodingRangeType.READ_BARRIER, 3),
-                    (EncodingRangeType.YIELD_FLAG, 1),
                     (EncodingRangeType.STALL_CYCLES, 4),
+                    (EncodingRangeType.YIELD_FLAG, 1),
+                    (EncodingRangeType.READ_BARRIER, 3),
+                    (EncodingRangeType.WRITE_BARRIER, 3),
+                    (EncodingRangeType.BARRIER_MASK, 6),
+                    (EncodingRangeType.REUSE_MASK, 4),
                 ]
 
                 offset = 13 * 8 + 1
                 for rtype, length in control_code_ranges:
-                    if i >= offset and i < offset + length:
+                    if (
+                        i >= offset
+                        and i < offset + length
+                        and get_bit_range2(self.inst, offset, offset + length) == 0
+                    ):
                         new_range = EncodingRange(rtype, i, 1)
                         break
                     offset += length
