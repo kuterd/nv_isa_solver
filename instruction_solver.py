@@ -105,7 +105,7 @@ class EncodingRanges:
         ranges = [rng.to_json_obj() for rng in self.ranges]
         return {"ranges": ranges, "inst": self.inst.hex()}
 
-    def to_json(self):
+    def to_json(self) -> str:
         return json.dumps(self.to_json_obj())
 
     @classmethod
@@ -114,29 +114,31 @@ class EncodingRanges:
         return cls(ranges, bytes.fromhex(obj["inst"]))
 
     @classmethod
-    def from_json(cls, json_str):
+    def from_json(cls, json_str: str):
         return EncodingRanges.from_json_obj(json.loads(json_str))
 
-    def _count(self, type):
+    def _count(self, type) -> int:
         result = 0
         for range in self.ranges:
             result += 1 if range.type == type else 0
         return result
 
-    def operand_count(self):
+    def operand_count(self) -> int:
         result = 0
         for range in self.ranges:
             if range.type == EncodingRangeType.OPERAND:
                 result = max(result, range.operand_index + 1)
         return result
 
-    def modifier_count(self):
+    def modifier_count(self) -> int:
         return self._count(EncodingRangeType.MODIFIER)
 
-    def _find(self, type):
+    def _find(self, type) -> List[EncodingRange]:
         return list(filter(lambda x: x.type == type, self.ranges))
 
-    def encode(self, sub_operands, modifiers, operand_modifiers={}, predicate=7):
+    def encode(
+        self, sub_operands, modifiers, operand_modifiers={}, predicate=7
+    ) -> bytearray:
         result = bytearray(b"\0" * 16)
         modifier_i = 0
         for range in self.ranges:
@@ -254,7 +256,7 @@ class EncodingRanges:
                 current.append((i, name))
         return result
 
-    def generate_html_table(self):
+    def generate_html_table(self) -> str:
         builder = table_utils.TableBuilder()
         builder.tbody_start()
 
@@ -369,7 +371,7 @@ def analyze_modifiers(original: List[str], mutated: List[str]):
 
 
 class InstructionMutationSet:
-    def __init__(self, inst, disasm, mutations, disassembler):
+    def __init__(self, inst: bytes | bytearray, disasm: str, mutations, disassembler):
         self.inst = inst
         self.disasm = disasm
         self.parsed = InstructionParser.parseInstruction(self.disasm)
@@ -604,7 +606,7 @@ class InstructionMutationSet:
         return EncodingRanges(result, self.inst)
 
 
-def set_bit(array, i):
+def set_bit(array: bytearray, i):
     bit_offset = i % 8
     array[i // 8] ^= 1 << bit_offset
 
@@ -915,7 +917,7 @@ INSTRUCTION_DESC_HEADER = """
 
 
 class InstructionDescGenerator:
-    def generate(self, instruction):
+    def generate(self, instruction: Instruction):
         self.result = '<div class="instruction-desc">'
         self.result += f'<span class="base-name">{instruction.base_name}</span>'
 
@@ -937,7 +939,7 @@ class InstructionDescGenerator:
         self.result += "</div>"
         return self.result
 
-    def visit(self, op):
+    def visit(self, op: parser.Operand):
         if isinstance(op, parser.DescOperand):
             self.visitDescOperand(op)
         elif isinstance(op, parser.ConstantMemOperand):
@@ -953,7 +955,7 @@ class InstructionDescGenerator:
         elif isinstance(op, parser.AttributeOperand):
             self.visitAttributeOperand(op)
 
-    def begin_section(self, op):
+    def begin_section(self, op: parser.Operand):
         self.result += f"<span class='flat-operand-section' style='background-color:{operand_colors[op.flat_operand_index]}'>"
 
     def end_section(self):
@@ -1002,7 +1004,7 @@ class InstructionDescGenerator:
         self.end_section()
 
 
-def generate_modifier_table(title, modifiers, rng):
+def generate_modifier_table(title: str, modifiers, rng: EncodingRange):
     html_result = "<p>" + title
     builder = table_utils.TableBuilder()
     builder.tbody_start()
@@ -1018,7 +1020,7 @@ def generate_modifier_table(title, modifiers, rng):
     return html_result
 
 
-def counter_remove_zeros(counts):
+def counter_remove_zeros(counts: Counter):
     for name, count in list(counts.items()):
         if count == 0:
             del counts[name]
@@ -1031,9 +1033,9 @@ class InstructionSpec:
 
     def __init__(
         self,
-        disasm,
-        parsed,
-        ranges,
+        disasm: str,
+        parsed: Instruction,
+        ranges: EncodingRanges,
         modifiers,
         operand_modifiers,
         operand_interactions=None,
@@ -1061,7 +1063,7 @@ class InstructionSpec:
             "operand_interactions": self.operand_interactions,
         }
 
-    def to_json(self):
+    def to_json(self) -> str:
         return json.dumps(self.to_json_obj())
 
     @classmethod
@@ -1148,7 +1150,7 @@ class InstructionSpec:
             result[i] = value
         return result
 
-    def get_minimal_modifiers(self):
+    def get_minimal_modifiers(self) -> List[str]:
         modifiers = []
         for modi_group in self.modifiers:
             if len(modi_group) == 0:
@@ -1161,7 +1163,7 @@ class InstructionSpec:
             modifiers += modis
         return modifiers
 
-    def encode_for_life_range(self, modifiers=[]):
+    def encode_for_life_range(self, modifiers=[]) -> bytearray:
         operands = self.parsed.get_flat_operands()
         operand_values = [0] * len(operands)
         reg_count = 0
@@ -1203,7 +1205,7 @@ class InstructionSpec:
         encoded = self.ranges.encode(operand_values, modifiers)
         return (reg_files, encoded)
 
-    def analyze_operand_interactions(self, disassembler):
+    def analyze_operand_interactions(self):
         try:
             reg_files, encoded = self.encode_for_life_range(
                 self.get_minimal_modifiers()
@@ -1310,7 +1312,7 @@ def instruction_analysis_pipeline(inst, disassembler):
     spec = InstructionSpec(
         asm, parsed_inst, ranges, modifier_values, operand_modifier_values
     )
-    spec.analyze_operand_interactions(disassembler)
+    spec.analyze_operand_interactions()
     return spec
 
 
