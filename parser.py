@@ -50,8 +50,6 @@ p_ConstTrDict = {
     r"\bQNAN\b": "NAN",
 }
 
-p_RImmeAddr = re.compile(r"(?P<R>R\d+)\s*(?P<II>-?0x[0-9a-fA-F]+)")
-
 c_AddrFuncs = set(
     [
         "BRA",
@@ -588,8 +586,18 @@ class _InstructionParser:
             return self._parseFloatIMM(op_full)
         elif op.startswith("desc") or op.startswith("gdesc"):
             return self._parseDescAddress(op)
-        elif op.startswith("COMP_STATUS"):
-            result = RegOperand("COMP_STATUS", 0)
+        elif op in [
+            "COMP_STATUS",
+            "ATEXIT_PC",
+            "TRAP_RETURN_PC",
+            "TRAP_RETURN_MASK",
+            "THREAD_STATE_ENUM",
+            "MCOLLECTIVE",
+            "MEXITED",
+            "TRA_RETURN_MASK",
+            "CUBE",
+        ] or op.startswith("???"):
+            result = RegOperand("SNOWFLAKE", op)
         elif op.startswith("TEX_"):
             result = RegOperand("TEX", op[4:])
         elif op.startswith("SR_"):
