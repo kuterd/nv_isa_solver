@@ -49,6 +49,10 @@ class Disassembler:
             except Exception:
                 print("Couldn't parse", disasm)
                 continue
+
+            # Some instructions can have modifiers that affect behaviour in the opcode!
+            opcode = get_bit_range2(inst, 0, 12)
+            key = f"{opcode}.{key}"
             if key in keys:
                 continue
             keys[key] = inst

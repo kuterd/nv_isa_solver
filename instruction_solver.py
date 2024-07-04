@@ -4,15 +4,15 @@ import tqdm
 from enum import Enum
 from typing import List
 from collections import Counter
+from concurrent import futures
+from argparse import ArgumentParser
+import traceback
+import sys
 
 from disasm_utils import Disassembler, set_bit_range2, get_bit_range2
 import table_utils
 import parser
 from parser import InstructionParser, Instruction
-from concurrent import futures
-from argparse import ArgumentParser
-import traceback
-import sys
 
 sys.path.append("life_range")
 from life_range import analyse_live_ranges, get_interaction_ranges, InteractionType
@@ -474,14 +474,18 @@ class InstructionMutationSet:
                         self.operand_modifier_bit_flag[i_bit] = flag
             if operand_effected:
                 continue
-            # Analyze instruction modifiers.
-            effected, flag = analyze_modifiers(
-                self.parsed.modifiers, mutated_parsed.modifiers
-            )
-            if effected:
-                self.modifier_bits.add(i_bit)
-            if flag:
-                self.instruction_modifier_bit_flag[i_bit] = flag
+
+            # Don't look for modifiers in the opcode section.
+            # we will consider it a different instruction anways.
+            if i_bit > 12:
+                # Analyze instruction modifiers.
+                effected, flag = analyze_modifiers(
+                    self.parsed.modifiers, mutated_parsed.modifiers
+                )
+                if effected:
+                    self.modifier_bits.add(i_bit)
+                if flag:
+                    self.instruction_modifier_bit_flag[i_bit] = flag
 
     def compute_encoding_ranges(self):
         """
@@ -1152,8 +1156,8 @@ class InstructionSpec:
         operand_values = [0] * len(operands)
         reg_count = 0
         ureg_count = 0
-        pred_count = 1
-        upred_count = 1
+        pred_count = 0
+        upred_count = 0
 
         modifiers = self.get_modifier_values(modifiers)
         if modifiers is None:
@@ -1169,11 +1173,11 @@ class InstructionSpec:
                     registers.append((i, operand_values[i]))
                     reg_count += 1
                 elif operand.reg_type == "P":
-                    operand_values[i] = pred_count
+                    operand_values[i] = pred_count * 2
                     predicates.append((i, operand_values[i]))
                     pred_count += 1
                 elif operand.reg_type == "UP":
-                    operand_values[i] = upred_count
+                    operand_values[i] = upred_count * 2
                     upredicates.append((i, operand_values[i]))
                     upred_count += 1
                 elif operand.reg_type == "UR":
