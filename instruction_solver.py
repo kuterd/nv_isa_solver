@@ -11,6 +11,12 @@ import parser
 from parser import InstructionParser, Instruction
 from concurrent import futures
 from argparse import ArgumentParser
+import traceback
+import sys
+
+sys.path.append("life_range")
+from life_range import analyse_live_ranges, get_interaction_ranges, InteractionType
+
 
 operand_colors = [
     "#FE8386",
@@ -130,7 +136,7 @@ class EncodingRanges:
     def _find(self, type):
         return list(filter(lambda x: x.type == type, self.ranges))
 
-    def encode(self, sub_operands, modifiers, operand_modifiers={}):
+    def encode(self, sub_operands, modifiers, operand_modifiers={}, predicate=7):
         result = bytearray(b"\0" * 16)
         modifier_i = 0
         for range in self.ranges:
@@ -140,8 +146,11 @@ class EncodingRanges:
             elif range.type == EncodingRangeType.OPERAND:
                 value = sub_operands[range.operand_index]
             elif range.type == EncodingRangeType.MODIFIER:
-                value = modifiers[modifier_i]
-                modifier_i += 1
+                if modifier_i < len(modifiers):
+                    value = modifiers[modifier_i]
+                    modifier_i += 1
+            elif range.type == EncodingRangeType.PREDICATE:
+                value = predicate
             elif (
                 range.type == EncodingRangeType.OPERAND_MODIFIER
                 and range.operand_index in operand_modifiers
@@ -434,7 +443,8 @@ class InstructionMutationSet:
             try:
                 mutated_parsed = InstructionParser.parseInstruction(asm)
             except Exception as e:
-                print(asm, e)
+                print("Couldn't parse", asm, e)
+                print(traceback.format_exc())
                 continue
             if self.parsed.get_key() != mutated_parsed.get_key():
                 # NOTE: Should we only say this is a opcode bit if the base instruction is different.
@@ -854,7 +864,6 @@ def analysis_modifier_splitting(
             or orig_difference.startswith("INVALID")
         ):
             return False
-        # print("INDICATOR", orig_difference)
         orig_difference = orig_difference[:-1]
         if (
             orig_difference in adj.modifiers
@@ -1022,6 +1031,7 @@ class InstructionSpec:
         self.ranges = ranges
         self.modifiers = modifiers
         self.operand_modifiers = operand_modifiers
+        self.operand_interactions = None
 
         self.empty_value = []
         self.all_modifiers = []
@@ -1073,8 +1083,10 @@ class InstructionSpec:
                 return 0
             for modifier in modifier_group:
                 _counts[modifier] -= 1
+                if _counts[modifier] < 0:
+                    return 0
                 counter_remove_zeros(_counts)
-            score = len(counts) - len(_counts)
+            score = sum(counts.values()) - sum(_counts.values())
             return score
 
         change = True
@@ -1106,6 +1118,12 @@ class InstructionSpec:
                     counter_remove_zeros(counts)
 
         if len(counts) != 0:
+            print(
+                "We failed to encode modifier values",
+                modifiers,
+                "current state",
+                counts,
+            )
             return None
 
         for operand_group, i, value in self.all_modifiers:
@@ -1119,9 +1137,14 @@ class InstructionSpec:
     def get_minimal_modifiers(self):
         modifiers = []
         for modi_group in self.modifiers:
+            if len(modi_group) == 0:
+                # this should never happen, but it does.
+                continue
+
             if "" in [modi[1] for modi in modi_group]:
                 continue
-            modifiers.append(modi_group[0][1][:-1])
+            modis = modi_group[0][1][:-1].split(".")
+            modifiers += modis
         return modifiers
 
     def encode_for_life_range(self, modifiers=[]):
@@ -1130,19 +1153,71 @@ class InstructionSpec:
         reg_count = 0
         ureg_count = 0
         pred_count = 1
+        upred_count = 1
+
         modifiers = self.get_modifier_values(modifiers)
+        if modifiers is None:
+            return None, None
+        registers = []
+        predicates = []
+        upredicates = []
+        uregisters = []
         for i, operand in enumerate(operands):
             if isinstance(operand, parser.RegOperand):
                 if operand.reg_type == "R":
                     operand_values[i] = reg_count * 16 + 16
+                    registers.append((i, operand_values[i]))
                     reg_count += 1
                 elif operand.reg_type == "P":
                     operand_values[i] = pred_count
+                    predicates.append((i, operand_values[i]))
                     pred_count += 1
+                elif operand.reg_type == "UP":
+                    operand_values[i] = upred_count
+                    upredicates.append((i, operand_values[i]))
+                    upred_count += 1
                 elif operand.reg_type == "UR":
-                    operand_values[i] = ureg_count * 4
+                    operand_values[i] = ureg_count * 4 + 4
+                    uregisters.append((i, operand_values[i]))
                     ureg_count += 1
-        return self.ranges.encode(operand_values, modifiers)
+        reg_files = {
+            "GPR": registers,
+            "PRED": predicates,
+            "UPRED": upredicates,
+            "UGPR": uregisters,
+        }
+        encoded = self.ranges.encode(operand_values, modifiers)
+        return (reg_files, encoded)
+
+    def analyze_operand_interactions(self, disassembler):
+        try:
+            reg_files, encoded = self.encode_for_life_range(
+                self.get_minimal_modifiers()
+            )
+            if encoded is None:
+                return
+            interaction_data, self.operand_interaction_raw = analyse_live_ranges(
+                encoded
+            )
+            interaction_ranges = get_interaction_ranges(interaction_data)
+        except Exception as e:
+            print("Couldn't analyse operands", self.disasm, e)
+            print(traceback.format_exc())
+            return
+        if interaction_ranges is None:
+            return
+        result = {}
+        for file_name, reg_ranges in interaction_ranges.items():
+            range_to_operand = {begin: opx for opx, begin in reg_files[file_name]}
+            result[file_name] = []
+            for rng in reg_ranges:
+                if rng[1] == "USED":
+                    continue
+                if rng[0] not in range_to_operand:
+                    continue
+                sub_operand_idx = range_to_operand[rng[0]]
+                result[file_name].append((sub_operand_idx, rng[1], rng[2]))
+        self.operand_interactions = result
 
     def generate_html(self):
         """
@@ -1150,8 +1225,27 @@ class InstructionSpec:
         """
         desc_generator = InstructionDescGenerator()
         html_result = desc_generator.generate(self.parsed)
+        interaction_type_names = {
+            InteractionType.READ: "READ",
+            InteractionType.WRITE: "WRITE",
+            InteractionType.READWRITE: "READ_WRITE",
+        }
+        if self.operand_interactions:
+            operand_interactions = []
+            operands = self.parsed.get_flat_operands()
+            for file, file_usages in self.operand_interactions.items():
+                for usg in file_usages:
+                    op = operands[usg[0]]
+                    operand_interactions.append((op, usg[1], usg[2]))
+            operand_interactions = sorted(
+                operand_interactions, key=lambda x: x[0].flat_operand_index
+            )
+
+            for i, operand_int in enumerate(operand_interactions):
+                html_result += f'<span class="flat-operand-section" style="background-color:{operand_colors[operand_int[0].flat_operand_index]}">{interaction_type_names[operand_int[1]]} {operand_int[0].reg_type} ({operand_int[2]} slots)</span>'
         html_result += f"<p> distilled: {self.disasm}</p>"
         html_result += f"<p> key: {self.parsed.get_key()}</p>"
+        # html_result += repr(self.operand_interactions)
         html_result += self.ranges.generate_html_table()
 
         modifier_ranges = self.ranges._find(EncodingRangeType.MODIFIER)
@@ -1228,7 +1322,6 @@ class ISADecoder:
         for i, (inst, disasm) in enumerate(instructions):
             if len(disasm) == 0:
                 continue
-            print(i, disasm)
             is_new = self._insert_inst(inst, disasm=disasm)
             if is_new:
                 discovered += 1
@@ -1290,21 +1383,16 @@ def instruction_analysis_pipeline(inst, disassembler):
     spec = InstructionSpec(
         asm, parsed_inst, ranges, modifier_values, operand_modifier_values
     )
-
+    spec.analyze_operand_interactions(disassembler)
     return spec
 
-
-import sys
-
-sys.path.append("life_range")
-from life_range import analyse_inst
 
 if __name__ == "__main__":
     arg_parser = ArgumentParser()
     arg_parser.add_argument("--arch", default="SM90a")
     arg_parser.add_argument("--cache_file", default="disasm_cache.txt")
     arg_parser.add_argument("--nvdisasm", default="nvdisasm")
-    arg_parser.add_argument("--num_parallel", default=5, type=int)
+    arg_parser.add_argument("--num_parallel", default=4, type=int)
     arguments = arg_parser.parse_args()
 
     disassembler = Disassembler(arguments.arch, nvdisasm=arguments.nvdisasm)
