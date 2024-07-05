@@ -134,12 +134,15 @@ class EncodingRanges:
     def _find(self, type) -> List[EncodingRange]:
         return list(filter(lambda x: x.type == type, self.ranges))
 
+    def get_flags(self) -> List[str]:
+        """
+        Return a list of ranges in the encoding ranges.
+        """
+        return [rng.name for rng in self._find(EncodingRangeType.FLAG)]
+
     def encode(
         self, sub_operands, modifiers, flags=set(), operand_modifiers={}, predicate=7
     ) -> bytearray:
-        # NOTE: Since our seperation of flags and modifiers are not perfect we
-        #      may want to combine modifiers and flags.
-
         result = bytearray(b"\0" * 16)
         modifier_i = 0
         for range in self.ranges:
@@ -1111,7 +1114,6 @@ class InstructionSpec:
 
     def get_modifier_values(self, modifiers):
         # Greedy algorithm for choosing the correct modifier values.
-        result = {}
         counts = Counter(modifiers)
 
         def score_match(modifier_group):
@@ -1161,6 +1163,14 @@ class InstructionSpec:
                     counts[modifier] -= 1
                     counter_remove_zeros(counts)
 
+        flags = self.ranges.get_flags()
+        used_flags = set()
+        for name in counts:
+            if name in flags:
+                used_flags.add(name)
+                counts[name] -= name
+        counter_remove_zeros(counts)
+
         if len(counts) != 0:
             print(
                 "We failed to encode modifier values",
@@ -1170,13 +1180,14 @@ class InstructionSpec:
             )
             return None
 
+        modi_values = {}
         for operand_group, i, value in self.all_modifiers:
             if i in result:
                 continue
             if len(operand_group) != 0:
                 continue
-            result[i] = value
-        return result
+            modi_values[i] = value
+        return modi_values, used_flags
 
     def get_minimal_modifiers(self) -> List[str]:
         modifiers = []
@@ -1199,7 +1210,7 @@ class InstructionSpec:
         pred_count = 1
         upred_count = 1
 
-        modifiers = self.get_modifier_values(modifiers)
+        modifiers, flags = self.get_modifier_values(modifiers)
         if modifiers is None:
             return None, None
         registers = []
