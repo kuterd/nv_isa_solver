@@ -1,6 +1,4 @@
-import re
 import json
-import tqdm
 from enum import Enum
 from typing import List
 from collections import Counter
@@ -139,6 +137,9 @@ class EncodingRanges:
     def encode(
         self, sub_operands, modifiers, flags=set(), operand_modifiers={}, predicate=7
     ) -> bytearray:
+        # NOTE: Since our seperation of flags and modifiers are not perfect we
+        #      may want to combine modifiers and flags.
+
         result = bytearray(b"\0" * 16)
         modifier_i = 0
         for range in self.ranges:
@@ -259,12 +260,12 @@ class EncodingRanges:
                     asm_operands = InstructionParser.parseInstruction(
                         asm
                     ).get_flat_operands()
+                    name = find_modifier_difference(
+                        comp_operands[modifier.operand_index].modifiers,
+                        asm_operands[modifier.operand_index].modifiers,
+                    )
                 except Exception:
                     continue
-                name = find_modifier_difference(
-                    comp_operands[modifier.operand_index].modifiers,
-                    asm_operands[modifier.operand_index].modifiers,
-                )
                 # name = ".".join(asm_modis)
                 comp = asm
                 current.append((i, name))
