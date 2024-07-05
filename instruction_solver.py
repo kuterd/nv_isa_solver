@@ -189,18 +189,28 @@ class EncodingRanges:
             disasms = disassembler.disassemble_parallel(insts)
             analysis_result.append([])
 
-            # TODO: Compare first to second to solve first one, then remove the sold value from counters.
-            comp = disasms[1]
+            try:
+                first_modis = InstructionParser.parseInstruction(disasms[0]).modifiers
+                second_modis = InstructionParser.parseInstruction(disasms[1]).modifiers
+            except Exception as e:
+                continue
 
+            first_difference = find_modifier_difference(second_modis, first_modis)
+
+            basis = Counter(first_modis)
+            for modi in first_difference.split("."):
+                basis[modi] -= 1
+            counter_remove_zeros(basis)
+
+            comp = disasms[1]
             replace_original = False
+
             for i, asm in enumerate(disasms):
                 try:
-                    comp_modis = InstructionParser.parseInstruction(comp).modifiers
                     asm_modis = InstructionParser.parseInstruction(asm).modifiers
                 except Exception:
                     continue
-                # FIXME: This doesn't work for some instructions with invalid modifiers!
-                name = find_modifier_difference(comp_modis, asm_modis)
+                name = basis_find_modifier_difference(basis, asm_modis)
                 # Replace the modifier value if the default value fuzzing found for this modifier is invalid.
                 if (
                     name.startswith("INVALID") or name.startswith("???")
@@ -209,7 +219,6 @@ class EncodingRanges:
                 ):
                     replace_original = True
                 analysis_result[-1].append((i, name))
-                comp = disasms[0]
             if replace_original:
                 for val, name in analysis_result[-1]:
                     # NOTE: Hopefully this will help with enumeration.
@@ -321,6 +330,19 @@ class EncodingRanges:
         builder.tbody_end()
         builder.end()
         return builder.result
+
+
+def basis_find_modifier_difference(basis: Counter[str], mutated: List[str]):
+    mutated = Counter(mutated)
+
+    difference = Counter(mutated)
+    difference.subtract(basis)
+    result = ""
+    for name, count in difference.items():
+        if len(name) == 0 or count <= 0:
+            continue
+        result += ".".join([name] * count) + "."
+    return result
 
 
 def find_modifier_difference(original: List[str], mutated: List[str]):
