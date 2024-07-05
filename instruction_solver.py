@@ -1168,8 +1168,8 @@ class InstructionSpec:
         operand_values = [0] * len(operands)
         reg_count = 0
         ureg_count = 0
-        pred_count = 0
-        upred_count = 0
+        pred_count = 1
+        upred_count = 1
 
         modifiers = self.get_modifier_values(modifiers)
         if modifiers is None:
@@ -1328,7 +1328,6 @@ if __name__ == "__main__":
     disassembler.load_cache(arguments.cache_file)
 
     analysis_result = {}
-    result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
     while True:
         instructions = disassembler.find_uniques_from_cache()
         instructions = list(instructions.items())
@@ -1361,9 +1360,23 @@ if __name__ == "__main__":
 
     analysis_result = sorted(list(analysis_result.items()), key=lambda x: x[0])
 
+    base_names = {}
     for key, spec in analysis_result:
-        result += spec.generate_html()
+        if spec.parsed.base_name not in base_names:
+            base_names[spec.parsed.base_name] = []
+        base_names[spec.parsed.base_name].append(spec)
 
-    with open("isa.html", "w") as file:
+    for base in base_names:
+        result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
+        for spec in base_names[base]:
+            result += spec.generate_html()
+        with open(f"output/{base}.html", "w") as file:
+            file.write(result)
+
+    with open("output/index.html", "w") as file:
+        result = ""
+        for base in base_names:
+            result += f'<a href="{base}.html">{base}</a><br>'
+
         file.write(result)
     disassembler.dump_cache(arguments.cache_file)
