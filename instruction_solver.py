@@ -137,7 +137,7 @@ class EncodingRanges:
         return list(filter(lambda x: x.type == type, self.ranges))
 
     def encode(
-        self, sub_operands, modifiers, operand_modifiers={}, predicate=7
+        self, sub_operands, modifiers, flags=set(), operand_modifiers={}, predicate=7
     ) -> bytearray:
         result = bytearray(b"\0" * 16)
         modifier_i = 0
@@ -151,6 +151,9 @@ class EncodingRanges:
                 if modifier_i < len(modifiers):
                     value = modifiers[modifier_i]
                     modifier_i += 1
+            elif range.type == EncodingRangeType.FLAG:
+                if range.name in flags:
+                    value = 1
             elif range.type == EncodingRangeType.PREDICATE:
                 value = predicate
             elif (
