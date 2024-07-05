@@ -200,7 +200,7 @@ class EncodingRanges:
                 except Exception:
                     continue
                 # FIXME: This doesn't work for some instructions with invalid modifiers!
-                name = analyse_modifiers_enumerate(comp_modis, asm_modis)
+                name = find_modifier_difference(comp_modis, asm_modis)
                 # Replace the modifier value if the default value fuzzing found for this modifier is invalid.
                 if (
                     name.startswith("INVALID") or name.startswith("???")
@@ -249,7 +249,7 @@ class EncodingRanges:
                     ).get_flat_operands()
                 except Exception:
                     continue
-                name = analyse_modifiers_enumerate(
+                name = find_modifier_difference(
                     comp_operands[modifier.operand_index].modifiers,
                     asm_operands[modifier.operand_index].modifiers,
                 )
@@ -323,7 +323,7 @@ class EncodingRanges:
         return builder.result
 
 
-def analyse_modifiers_enumerate(original: List[str], mutated: List[str]):
+def find_modifier_difference(original: List[str], mutated: List[str]):
     original = Counter(original)
     mutated = Counter(mutated)
 
@@ -865,7 +865,7 @@ def analysis_modifier_splitting(
         if len(set([orig.get_key(), modi.get_key(), adj.get_key()])) != 1:
             return False
 
-        orig_difference = analyse_modifiers_enumerate(orig.modifiers, modi.modifiers)
+        orig_difference = find_modifier_difference(orig.modifiers, modi.modifiers)
         if (
             len(orig_difference) == 0
             or "." in orig_difference[:-1]
