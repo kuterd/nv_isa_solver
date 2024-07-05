@@ -1413,7 +1413,7 @@ if __name__ == "__main__":
             file.write(result)
 
     with open("output/index.html", "w") as file:
-        result = ""
+        result = f"<h1> Nvidia {arguments.arch} Instruction Set Architecture</h1>"
         for base in base_names:
             result += f'<a href="{base}.html">{base}</a><br>'
 
