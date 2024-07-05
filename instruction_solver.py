@@ -188,6 +188,8 @@ class EncodingRanges:
                 insts.append(self.encode(operand_values, modi_values))
             disasms = disassembler.disassemble_parallel(insts)
             analysis_result.append([])
+
+            # TODO: Compare first to second to solve first one, then remove the sold value from counters.
             comp = disasms[1]
 
             replace_original = False
@@ -198,7 +200,7 @@ class EncodingRanges:
                 except Exception:
                     continue
                 # FIXME: This doesn't work for some instructions with invalid modifiers!
-                name = analyze_modifiers_enumerate(comp_modis, asm_modis)
+                name = analyse_modifiers_enumerate(comp_modis, asm_modis)
                 # Replace the modifier value if the default value fuzzing found for this modifier is invalid.
                 if (
                     name.startswith("INVALID") or name.startswith("???")
@@ -247,7 +249,7 @@ class EncodingRanges:
                     ).get_flat_operands()
                 except Exception:
                     continue
-                name = analyze_modifiers_enumerate(
+                name = analyse_modifiers_enumerate(
                     comp_operands[modifier.operand_index].modifiers,
                     asm_operands[modifier.operand_index].modifiers,
                 )
@@ -321,7 +323,7 @@ class EncodingRanges:
         return builder.result
 
 
-def analyze_modifiers_enumerate(original: List[str], mutated: List[str]):
+def analyse_modifiers_enumerate(original: List[str], mutated: List[str]):
     original = Counter(original)
     mutated = Counter(mutated)
 
@@ -336,9 +338,9 @@ def analyze_modifiers_enumerate(original: List[str], mutated: List[str]):
     return result
 
 
-def analyze_modifiers(original: List[str], mutated: List[str]):
+def analyse_modifiers(original: List[str], mutated: List[str]):
     """
-    Analyze a given list of modifiers and determine if the modifier bit can be a flag.
+    analyse a given list of modifiers and determine if the modifier bit can be a flag.
     Can have false positives for flag detection but will be corrected by second stage.
     """
     original = Counter(original)
@@ -391,7 +393,7 @@ class InstructionMutationSet:
         self.modifier_bits = set()
         self.modifier_groups = {}
 
-        self._analyze()
+        self._analyse()
 
     def reset_modifier_groups(self):
         self.modifier_groups = {}
@@ -432,7 +434,7 @@ class InstructionMutationSet:
                 max_num += 1
             self.modifier_groups[bit] = num_map[gid]
 
-    def _analyze(self):
+    def _analyse(self):
         parsed_operands = self.parsed.get_flat_operands()
         self.key = self.parsed.get_key()
         for i_bit, inst, asm in self.mutations:
@@ -460,14 +462,14 @@ class InstructionMutationSet:
                 self.predicate_bits.add(i_bit)
 
             operand_effected = False
-            # Analyze operand values and operand modifiers.
+            # analyse operand values and operand modifiers.
             for i, (a, b) in enumerate(zip(mutated_operands, parsed_operands)):
                 if not a.compare(b):
                     self.operand_value_bits.add(i_bit)
                     self.bit_to_operand[i_bit] = i
                     operand_effected = True
                 else:
-                    effected, flag = analyze_modifiers(b.modifiers, a.modifiers)
+                    effected, flag = analyse_modifiers(b.modifiers, a.modifiers)
                     if effected:
                         self.bit_to_operand[i_bit] = i
                         self.operand_modifier_bits.add(i_bit)
@@ -480,8 +482,8 @@ class InstructionMutationSet:
             # Don't look for modifiers in the opcode section.
             # we will consider it a different instruction anways.
             if i_bit > 12:
-                # Analyze instruction modifiers.
-                effected, flag = analyze_modifiers(
+                # analyse instruction modifiers.
+                effected, flag = analyse_modifiers(
                     self.parsed.modifiers, mutated_parsed.modifiers
                 )
                 if effected:
@@ -863,7 +865,7 @@ def analysis_modifier_splitting(
         if len(set([orig.get_key(), modi.get_key(), adj.get_key()])) != 1:
             return False
 
-        orig_difference = analyze_modifiers_enumerate(orig.modifiers, modi.modifiers)
+        orig_difference = analyse_modifiers_enumerate(orig.modifiers, modi.modifiers)
         if (
             len(orig_difference) == 0
             or "." in orig_difference[:-1]
@@ -1205,7 +1207,7 @@ class InstructionSpec:
         encoded = self.ranges.encode(operand_values, modifiers)
         return (reg_files, encoded)
 
-    def analyze_operand_interactions(self):
+    def analyse_operand_interactions(self):
         try:
             reg_files, encoded = self.encode_for_life_range(
                 self.get_minimal_modifiers()
@@ -1312,7 +1314,7 @@ def instruction_analysis_pipeline(inst, disassembler):
     spec = InstructionSpec(
         asm, parsed_inst, ranges, modifier_values, operand_modifier_values
     )
-    spec.analyze_operand_interactions()
+    spec.analyse_operand_interactions()
     return spec
 
 
