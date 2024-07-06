@@ -249,8 +249,13 @@ class EncodingRanges:
             for modi_i in range(2**modifier.length):
                 operand_modis = {}
                 operand_modis[modifier.operand_index] = modi_i
-                insts.append(self.encode(operand_values, modi_values, operand_modis))
+                insts.append(
+                    self.encode(
+                        operand_values, modi_values, operand_modifiers=operand_modis
+                    )
+                )
             disasms = disassembler.disassemble_parallel(insts)
+
             current = []
             result[modifier.operand_index] = current
             comp = disasms[1]
