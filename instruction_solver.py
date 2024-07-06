@@ -950,9 +950,9 @@ INSTRUCTION_DESC_HEADER = """
 
 
 class InstructionDescGenerator:
-    def generate(self, instruction: Instruction):
+    def generate(self, instruction: Instruction, full_name: str):
         self.result = '<div class="instruction-desc">'
-        self.result += f'<span class="base-name">{instruction.base_name}</span>'
+        self.result += f'<span class="base-name">{full_name}</span>'
 
         # Assign numbers to sub operands.
         flat_op_i = 0
@@ -1086,6 +1086,8 @@ class InstructionSpec:
             for value, name in modifier_range:
                 self.all_modifiers.append((name[:-1], i, value))
 
+        self.canonical_name = self._get_canonical_name()
+
     def to_json_obj(self):
         return {
             "disasm": self.disasm,
@@ -1098,6 +1100,15 @@ class InstructionSpec:
 
     def to_json(self) -> str:
         return json.dumps(self.to_json_obj())
+
+    def _get_canonical_name(self) -> str:
+        inst_modifiers = set(self.parsed.modifiers)
+
+        for modi, i, value in self.all_modifiers:
+            if modi in inst_modifiers:
+                inst_modifiers.remove(modi)
+
+        return ".".join([self.parsed.base_name] + list(inst_modifiers))
 
     @classmethod
     def from_json_obj(cls, obj):
@@ -1137,6 +1148,7 @@ class InstructionSpec:
             score = sum(counts.values()) - sum(_counts.values())
             return score
 
+        modi_values = {}
         change = True
         while len(counts) != 0 and change:
             change = False
@@ -1145,7 +1157,7 @@ class InstructionSpec:
             best_modi_group = None
             best_match = 0
             for modifier_group, i, value in self.all_modifiers:
-                if i in result:
+                if i in modi_values:
                     continue
                 modifier_group = [
                     operand
@@ -1160,7 +1172,7 @@ class InstructionSpec:
                     best_modi_group = modifier_group
             if best_match != 0:
                 change = True
-                result[best_i] = best_value
+                modi_values[best_i] = best_value
                 for modifier in best_modi_group:
                     counts[modifier] -= 1
                     counter_remove_zeros(counts)
@@ -1182,9 +1194,8 @@ class InstructionSpec:
             )
             return None
 
-        modi_values = {}
         for operand_group, i, value in self.all_modifiers:
-            if i in result:
+            if i in modi_values:
                 continue
             if len(operand_group) != 0:
                 continue
@@ -1281,7 +1292,7 @@ class InstructionSpec:
         Generate html for this instruction.
         """
         desc_generator = InstructionDescGenerator()
-        html_result = desc_generator.generate(self.parsed)
+        html_result = desc_generator.generate(self.parsed, self.canonical_name)
         interaction_type_names = {
             InteractionType.READ: "READ",
             InteractionType.WRITE: "WRITE",
