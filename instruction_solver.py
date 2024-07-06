@@ -1085,7 +1085,8 @@ class InstructionSpec:
             for value, name in modifier_range:
                 self.all_modifiers.append((name[:-1], i, value))
 
-        self.canonical_name = self._get_canonical_name()
+        self.opcode_modis = self._get_opcode_modis()
+        self.canonical_name = ".".join([self.parsed.base_name] + self.opcode_modis)
 
     def to_json_obj(self):
         return {
@@ -1095,19 +1096,21 @@ class InstructionSpec:
             "modifiers": self.modifiers,
             "operand_modifiers": self.operand_modifiers,
             "operand_interactions": self.operand_interactions,
+            "opcode_modis": self.opcode_modis,
+            "canonical_name": self.canonical_name,
         }
 
     def to_json(self) -> str:
         return json.dumps(self.to_json_obj())
 
-    def _get_canonical_name(self) -> str:
+    def _get_opcode_modis(self) -> str:
         inst_modifiers = set(self.parsed.modifiers)
 
         for modi, i, value in self.all_modifiers:
             if modi in inst_modifiers:
                 inst_modifiers.remove(modi)
 
-        return ".".join([self.parsed.base_name] + list(inst_modifiers))
+        return list(inst_modifiers)
 
     @classmethod
     def from_json_obj(cls, obj):
@@ -1127,6 +1130,11 @@ class InstructionSpec:
     def get_modifier_values(self, modifiers):
         # Greedy algorithm for choosing the correct modifier values.
         counts = Counter(modifiers)
+
+        for modi in self.opcode_modis:
+            counts[modi] -= 1
+            if counts[modi] < 0:
+                return None
 
         def score_match(modifier_group):
             _counts = Counter(counts)
@@ -1181,7 +1189,7 @@ class InstructionSpec:
         for name in counts:
             if name in flags:
                 used_flags.add(name)
-                counts[name] -= name
+                counts[name] -= 1
         counter_remove_zeros(counts)
 
         if len(counts) != 0:
@@ -1202,7 +1210,7 @@ class InstructionSpec:
         return modi_values, used_flags
 
     def get_minimal_modifiers(self) -> List[str]:
-        modifiers = []
+        modifiers = list(self.opcode_modis)
         for modi_group in self.modifiers:
             if len(modi_group) == 0:
                 # this should never happen, but it does.
@@ -1255,6 +1263,19 @@ class InstructionSpec:
         }
         encoded = self.ranges.encode(operand_values, modifiers)
         return (reg_files, encoded)
+
+    def encode(self, operand_values, operand_modifiers={}, modifiers=[], predicate=7):
+        modifiers, flags = self.get_modifier_values(modifiers)
+        if modifiers is None:
+            return None
+
+        encoded = self.ranges.encode(
+            operand_values,
+            modifiers=modifiers,
+            flags=flags,
+            operand_modifiers=operand_modifiers,
+        )
+        return encoded
 
     def analyse_operand_interactions(self):
         try:
@@ -1370,6 +1391,54 @@ def instruction_analysis_pipeline(inst, disassembler):
     )
     spec.analyse_operand_interactions()
     return spec
+
+
+class ISASpec:
+    def __init__(self, instructions):
+        self.instructions = instructions
+
+    @classmethod
+    def from_json_obj(cls, obj):
+        return cls(
+            {key: InstructionSpec.from_json_obj(value) for key, value in obj.items()}
+        )
+
+    @classmethod
+    def from_json(cls, json_str):
+        return ISASpec.from_json_obj(json.loads(json_str))
+
+    @classmethod
+    def from_file(cls, filename):
+        with open(filename) as file:
+            return ISASpec.from_json(file.read())
+
+    def find_instruction(self, target_key, signature=[], modifiers=[]):
+        """
+        Find best instruction spec best matching the modifiers.
+        """
+        modifiers = Counter(modifiers)
+
+        score = -1
+        best = None
+        for key, inst in self.instructions.items():
+            signature_key = inst.parsed.get_key()
+            if signature_key != target_key:
+                continue
+            _modifiers = Counter(modifiers)
+            match = True
+
+            for modi in inst.opcode_modis:
+                _modifiers[modi] -= 1
+                if _modifiers[modi] < 0:
+                    match = False
+                    break
+            if not match:
+                continue
+            new_score = sum(modifiers.values()) - sum(_modifiers.values())
+            if new_score > score:
+                best = inst
+                score = new_score
+        return best
 
 
 if __name__ == "__main__":
