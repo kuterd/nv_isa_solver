@@ -89,6 +89,6 @@ for i, line in enumerate(arguments.file):
         disassembler.distill_instruction(inst)
 
 print(uncached)
-print(len(uncached), "Instructions are not accounted for!")
+print("Found", len(uncached), "instructions")
 
 disassembler.dump_cache(arguments.cache_file)
