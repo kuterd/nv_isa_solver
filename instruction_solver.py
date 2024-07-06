@@ -857,6 +857,9 @@ def analysis_modifier_coalescing(
         for i in range(rng.start, rng.start + rng.length):
             changed = True
             mset.modifier_bits.add(i)
+    if changed:
+        mset.reset_modifier_groups()
+
     return changed
 
 
@@ -865,7 +868,6 @@ def analysis_modifier_splitting(
 ):
     """
     Split the modifier if there is independence between modifiers.
-
     """
     ranges = mset.compute_encoding_ranges()
     modifier_ranges = ranges._find(EncodingRangeType.MODIFIER)
@@ -917,7 +919,7 @@ def analysis_modifier_splitting(
             mset.modifier_groups[rng.start + i] = next_group_id
 
     for rng in modifier_ranges:
-        for i in range(1, rng.length - 1):
+        for i in range(1, rng.length):
             if (
                 analyse_adj(rng.start, rng.start + i)
                 or analyse_adj(rng.start + i - 1, rng.start + i)
