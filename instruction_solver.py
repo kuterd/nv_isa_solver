@@ -1361,6 +1361,8 @@ if __name__ == "__main__":
     arg_parser.add_argument("--cache_file", default="disasm_cache.txt")
     arg_parser.add_argument("--nvdisasm", default="nvdisasm")
     arg_parser.add_argument("--num_parallel", default=4, type=int)
+    arg_parser.add_argument("--filter", default=None, type=str)
+
     arguments = arg_parser.parse_args()
 
     disassembler = Disassembler(arguments.arch, nvdisasm=arguments.nvdisasm)
@@ -1373,6 +1375,10 @@ if __name__ == "__main__":
         instructions = [
             (key, inst) for key, inst in instructions if key not in analysis_result
         ]
+        if arguments.filter:
+            instructions = [
+                (key, inst) for key, inst in instructions if arguments.filter in key
+            ]
         if len(instructions) == 0:
             print("No new instruction found, exiting")
             break
