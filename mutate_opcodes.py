@@ -40,6 +40,4 @@ for opcode in known_opcodes:
     for seed in known_instruction_seeds:
         insts.append(opcode + seed)
 disassembler.disassemble_parallel(insts)
-disassembler.dump_cache("disasm_cache.txt")
-
 disassembler.dump_cache(arguments.cache_file)

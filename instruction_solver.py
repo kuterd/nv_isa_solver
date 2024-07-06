@@ -7,7 +7,7 @@ from argparse import ArgumentParser
 import traceback
 import sys
 
-from disasm_utils import Disassembler, set_bit_range2, get_bit_range2
+from disasm_utils import Disassembler, set_bit_range, get_bit_range
 import table_utils
 import parser
 from parser import InstructionParser, Instruction
@@ -168,7 +168,7 @@ class EncodingRanges:
 
             if not value:
                 continue
-            set_bit_range2(result, range.start, range.start + range.length, value)
+            set_bit_range(result, range.start, range.start + range.length, value)
         return result
 
     def enumerate_modifiers(self, disassembler, initial_values=None):
@@ -183,7 +183,7 @@ class EncodingRanges:
             _modi_values = list(initial_values)
         else:
             _modi_values = [
-                get_bit_range2(self.inst, rng.start, rng.start + rng.length)
+                get_bit_range(self.inst, rng.start, rng.start + rng.length)
                 for rng in modifiers
             ]
 
@@ -199,7 +199,7 @@ class EncodingRanges:
             try:
                 first_modis = InstructionParser.parseInstruction(disasms[0]).modifiers
                 second_modis = InstructionParser.parseInstruction(disasms[1]).modifiers
-            except Exception as e:
+            except Exception:
                 continue
 
             first_difference = find_modifier_difference(second_modis, first_modis)
@@ -209,7 +209,6 @@ class EncodingRanges:
                 basis[modi] -= 1
             counter_remove_zeros(basis)
 
-            comp = disasms[1]
             replace_original = False
 
             for i, asm in enumerate(disasms):
@@ -221,7 +220,7 @@ class EncodingRanges:
                 # Replace the modifier value if the default value fuzzing found for this modifier is invalid.
                 if (
                     name.startswith("INVALID") or name.startswith("???")
-                ) and i == get_bit_range2(
+                ) and i == get_bit_range(
                     self.inst, modifier.start, modifier.start + modifier.length
                 ):
                     replace_original = True
@@ -240,7 +239,7 @@ class EncodingRanges:
         modifiers = self._find(EncodingRangeType.MODIFIER)
         result = {}
         modi_values = [
-            get_bit_range2(self.inst, rng.start, rng.start + rng.length)
+            get_bit_range(self.inst, rng.start, rng.start + rng.length)
             for rng in modifiers
         ]
         operand_values = [0] * self.operand_count()
@@ -602,7 +601,7 @@ class InstructionMutationSet:
                     if (
                         i >= offset
                         and i < offset + length
-                        and get_bit_range2(self.inst, offset, offset + length) == 0
+                        and get_bit_range(self.inst, offset, offset + length) == 0
                     ):
                         new_range = EncodingRange(rtype, i, 1)
                         break
@@ -1310,7 +1309,12 @@ class InstructionSpec:
             )
 
             for i, operand_int in enumerate(operand_interactions):
-                html_result += f'<span class="flat-operand-section" style="background-color:{operand_colors[operand_int[0].flat_operand_index]}">{interaction_type_names[operand_int[1]]} {operand_int[0].reg_type} ({operand_int[2]} slots)</span>'
+                color = operand_colors[operand_int[0].flat_operand_index]
+                html_result += f"""
+                    <span class="flat-operand-section" style="background-color:{color}">
+                    {interaction_type_names[operand_int[1]]} {operand_int[0].reg_type} ({operand_int[2]} slots)
+                    </span>
+                """
         html_result += f"<p> distilled: {self.disasm}</p>"
         html_result += f"<p> key: {self.parsed.get_key()}</p>"
         # html_result += repr(self.operand_interactions)

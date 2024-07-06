@@ -51,7 +51,7 @@ class Disassembler:
                 continue
 
             # Some instructions can have modifiers that affect behaviour in the opcode!
-            opcode = get_bit_range2(inst, 0, 12)
+            opcode = get_bit_range(inst, 0, 12)
             key = f"{opcode}.{key}"
             if key in keys:
                 continue
@@ -173,22 +173,12 @@ class Disassembler:
         instructions = []
         for i in range(pow(2, bit_end - bit_start + 1)):
             inst_bytes = bytearray(bytes(base))
-            set_bit_range2(inst_bytes, bit_start, bit_end, i)
+            set_bit_range(inst_bytes, bit_start, bit_end, i)
             instructions.append(inst_bytes)
         return zip(instructions, self.disassemble_parallel(instructions))
 
 
 def set_bit_range(byte_array, start_bit, end_bit, value):
-    length = end_bit - start_bit - 1
-    for i in range(start_bit, end_bit):
-        mask = 1 << (7 - (i % 8))
-        if value & (1 << (length - i + start_bit)):
-            byte_array[i // 8] |= mask
-        else:
-            byte_array[i // 8] &= ~mask
-
-
-def set_bit_range2(byte_array, start_bit, end_bit, value):
     for i in range(start_bit, end_bit):
         mask = 1 << (i % 8)
         if value & (1 << (i - start_bit)):
@@ -197,10 +187,9 @@ def set_bit_range2(byte_array, start_bit, end_bit, value):
             byte_array[i // 8] &= ~mask
 
 
-def get_bit_range2(byte_array, start_bit, end_bit):
+def get_bit_range(byte_array, start_bit, end_bit):
     result = 0
     for i in range(start_bit, end_bit):
-        mask = 1 << (i % 8)
         v = (byte_array[i // 8] >> (i % 8)) & 1
         result |= v << (i - start_bit)
     return result
