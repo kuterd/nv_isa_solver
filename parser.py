@@ -165,11 +165,10 @@ class Operand:
     @classmethod
     def from_json_obj(cls, obj):
         otype = obj["type"]
-
         if otype == "RegOperand":
             return RegOperand.from_json_obj(obj)
         elif otype == "AttributeOperand":
-            return RegOperand.from_json_obj(obj)
+            return AttributeOperand.from_json_obj(obj)
         elif otype == "AddressOperand":
             return AddressOperand.from_json_obj(obj)
         elif otype == "IntIMMOperand":
@@ -257,7 +256,9 @@ class AttributeOperand(Operand):
 
     @classmethod
     def from_json_obj(cls, obj):
-        return cls(obj["sub_operands"][0], modifiers=obj["modifiers"])
+        return cls(
+            Operand.from_json_obj(obj["sub_operands"][0]), modifiers=obj["modifiers"]
+        )
 
 
 class AddressOperand(Operand):
@@ -286,7 +287,8 @@ class AddressOperand(Operand):
 
     @classmethod
     def from_json_obj(cls, obj):
-        return cls(obj["sub_operands"], modifiers=obj["modifiers"])
+        sub_operands = [Operand.from_json_obj(op) for op in obj["sub_operands"]]
+        return cls(sub_operands, modifiers=obj["modifiers"])
 
 
 class IntIMMOperand(Operand):
@@ -335,7 +337,7 @@ class FloatIMMOperand(Operand):
 
 class ConstantMemOperand(Operand):
     def __init__(self, bank, address, cx=False, modifiers=None):
-        super().__init__([bank, address], modifiers=None)
+        super().__init__([bank, address], modifiers=modifiers)
         self.cx = cx
 
     def get_operand_key(self):
@@ -353,17 +355,18 @@ class ConstantMemOperand(Operand):
             "type": type(self).__name__,
             "cx": self.cx,
             "sub_operands": [op.to_json_obj() for op in self.sub_operands],
+            "modifiers": self.modifiers,
         }
 
     @classmethod
     def from_json_obj(cls, obj):
-        operands = obj["sub_operands"]
+        operands = [Operand.from_json_obj(op) for op in obj["sub_operands"]]
         return cls(operands[0], operands[1], modifiers=obj["modifiers"])
 
 
 class DescOperand(Operand):
     def __init__(self, bank, address=None, g=False, modifiers=None):
-        super().__init__([bank] + ([address] if address else []), modifiers=None)
+        super().__init__([bank] + ([address] if address else []), modifiers=modifiers)
         self.g = g
 
     def get_operand_key(self):
@@ -384,11 +387,12 @@ class DescOperand(Operand):
             "type": type(self).__name__,
             "g": self.g,
             "sub_operands": [op.to_json_obj() for op in self.sub_operands],
+            "modifiers": self.modifiers,
         }
 
     @classmethod
     def from_json_obj(cls, obj):
-        operands = obj["sub_operands"]
+        operands = [Operand.from_json_obj(op) for op in obj["sub_operands"]]
         return cls(
             operands[0],
             None if len(operands) == 1 else operands[1],
