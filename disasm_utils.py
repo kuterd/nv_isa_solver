@@ -193,39 +193,3 @@ def get_bit_range(byte_array, start_bit, end_bit):
         v = (byte_array[i // 8] >> (i % 8)) & 1
         result |= v << (i - start_bit)
     return result
-
-
-def dump_bitrange(inst):
-    for i in range(8 * 8):
-        if i % 8 == 0:
-            print(" ", end="")
-        print(7 - i % 8, end="")
-    print("")
-    for i in range(8 * 16):
-        if i % 8 == 0:
-            print("", end=" ")
-        bit_index = 7 - i % 8
-        byte_index = i // 8
-        print((inst[byte_index] >> bit_index) & 1, end="")
-        if i == 64 - 1:
-            print("")
-    print("\n")
-
-
-def dump_bits(inst):
-    for i in range(8 * 16):
-        bit_index = 7 - i % 8
-        byte_index = i // 8
-        print((inst[byte_index] & (1 << (bit_index))) >> bit_index, end="")
-        if i == 64 - 1:
-            print("")
-    print("\n")
-
-
-def read_corpus(filename):
-    file = open(filename, "r")
-    entries = []
-    for line in file:
-        entries.append(bytes.fromhex(line.split("---")[1].strip()))
-    file.close()
-    return entries
