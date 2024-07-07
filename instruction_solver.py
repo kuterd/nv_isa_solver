@@ -148,38 +148,53 @@ class EncodingRanges:
         operand_modifiers={},
         operand_flags={},
         predicate=7,
+        stall_cycles=15,
+        yield_flag=True,
+        read_barrier=7,
+        write_barrier=7,
+        barrier_mask=0,
     ) -> bytearray:
         result = bytearray(b"\0" * 16)
         modifier_i = 0
-        for range in self.ranges:
+
+        range_vals = {
+            EncodingRangeType.PREDICATE: predicate,
+            EncodingRangeType.STALL_CYCLES: stall_cycles,
+            EncodingRangeType.YIELD_FLAG: 1 if yield_flag else 0,
+            EncodingRangeType.READ_BARRIER: read_barrier,
+            EncodingRangeType.WRITE_BARRIER: write_barrier,
+            EncodingRangeType.BARRIER_MASK: barrier_mask,
+        }
+
+        for rng in self.ranges:
             value = None
-            if range.type == EncodingRangeType.CONSTANT:
-                value = range.constant
-            elif range.type == EncodingRangeType.OPERAND:
-                value = sub_operands[range.operand_index]
-            elif range.type == EncodingRangeType.MODIFIER:
+            if rng.type == EncodingRangeType.CONSTANT:
+                value = rng.constant
+            elif rng.type == EncodingRangeType.OPERAND:
+                value = sub_operands[rng.operand_index]
+            elif rng.type == EncodingRangeType.MODIFIER:
                 if modifier_i < len(modifiers):
                     value = modifiers[modifier_i]
                     modifier_i += 1
-            elif range.type == EncodingRangeType.FLAG:
-                if range.name in flags:
+            elif rng.type == EncodingRangeType.FLAG:
+                if rng.name in flags:
                     value = 1
-            elif range.type == EncodingRangeType.PREDICATE:
-                value = predicate
             elif (
-                range.type == EncodingRangeType.OPERAND_MODIFIER
-                and range.operand_index in operand_modifiers
+                rng.type == EncodingRangeType.OPERAND_MODIFIER
+                and rng.operand_index in operand_modifiers
             ):
-                value = operand_modifiers[range.operand_index]
+                value = operand_modifiers[rng.operand_index]
             elif (
-                range.type == EncodingRangeType.OPERAND_FLAG
-                and range.operand_index in operand_flags
+                rng.type == EncodingRangeType.OPERAND_FLAG
+                and rng.operand_index in operand_flags
             ):
-                value = 1 if range.name in operand_flags[range.operand_index] else 0
+                value = 1 if rng.name in operand_flags[rng.operand_index] else 0
+            elif rng.type in range_vals:
+                value = range_vals[rng.type]
 
             if not value:
                 continue
-            set_bit_range(result, range.start, range.start + range.length, value)
+            set_bit_range(result, rng.start, rng.start + rng.length, value)
         return result
 
     def enumerate_modifiers(self, disassembler, initial_values=None):
@@ -1290,19 +1305,29 @@ class InstructionSpec:
         operand_flags={},
         modifiers=[],
         predicate=7,
-    ):
+        stall_cycles=15,
+        yield_flag=False,
+        read_barrier=0,
+        write_barrier=0,
+        barrier_mask=0,
+    ) -> bytearray:
         modifiers, flags = self.get_modifier_values(modifiers)
         if modifiers is None:
             return None
 
-        encoded = self.ranges.encode(
+        return self.ranges.encode(
             operand_values,
             modifiers=modifiers,
             flags=flags,
             operand_modifiers=operand_modifiers,
             operand_flags=operand_flags,
+            predicate=predicate,
+            stall_cycles=stall_cycles,
+            yield_flag=yield_flag,
+            read_barrier=read_barrier,
+            write_barrier=write_barrier,
+            barrier_mask=barrier_mask,
         )
-        return encoded
 
     def analyse_operand_interactions(self):
         try:
