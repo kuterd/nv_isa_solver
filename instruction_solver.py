@@ -755,6 +755,8 @@ def analysis_operand_fix(
     With operands like [UR10 + 0x1], a constant IMM of 0 changes the operand
     signature and won't be removed with distillation, causing a discontinuity
     in the operand or makes it look shorter than it actually is.
+
+    Same happens with some predicates too
     """
 
     operands = mset.parsed.get_flat_operands()
@@ -783,8 +785,9 @@ def analysis_operand_fix(
 
     for i, rng in enumerate(operand_ranges):
         operand = operands[rng.operand_index]
-        if not isinstance(operand, parser.IntIMMOperand) or not isinstance(
-            operand.parent, parser.AddressOperand
+        if not isinstance(operand, parser.Operand) and not (
+            isinstance(operand, parser.IntIMMOperand)
+            and isinstance(operand.parent, parser.AddressOperand)
         ):
             continue
         # Not 100% sure about this, what if the bit is between bytes?
