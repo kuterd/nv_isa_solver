@@ -141,7 +141,13 @@ class EncodingRanges:
         return [rng.name for rng in self._find(EncodingRangeType.FLAG)]
 
     def encode(
-        self, sub_operands, modifiers, flags=set(), operand_modifiers={}, predicate=7
+        self,
+        sub_operands,
+        modifiers,
+        flags=set(),
+        operand_modifiers={},
+        operand_flags={},
+        predicate=7,
     ) -> bytearray:
         result = bytearray(b"\0" * 16)
         modifier_i = 0
@@ -165,6 +171,11 @@ class EncodingRanges:
                 and range.operand_index in operand_modifiers
             ):
                 value = operand_modifiers[range.operand_index]
+            elif (
+                range.type == EncodingRangeType.OPERAND_FLAG
+                and range.operand_index in operand_flags
+            ):
+                value = 1 if range.name in operand_flags[range.operand_index] else 0
 
             if not value:
                 continue
@@ -1269,7 +1280,14 @@ class InstructionSpec:
         encoded = self.ranges.encode(operand_values, modifiers)
         return (reg_files, encoded)
 
-    def encode(self, operand_values, operand_modifiers={}, modifiers=[], predicate=7):
+    def encode(
+        self,
+        operand_values,
+        operand_modifiers={},
+        operand_flags={},
+        modifiers=[],
+        predicate=7,
+    ):
         modifiers, flags = self.get_modifier_values(modifiers)
         if modifiers is None:
             return None
@@ -1279,6 +1297,7 @@ class InstructionSpec:
             modifiers=modifiers,
             flags=flags,
             operand_modifiers=operand_modifiers,
+            operand_flags=operand_flags,
         )
         return encoded
 
