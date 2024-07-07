@@ -5,16 +5,13 @@ from collections import Counter
 from concurrent import futures
 from argparse import ArgumentParser
 import traceback
-import sys
 
 from disasm_utils import Disassembler, set_bit_range, get_bit_range
 import table_utils
 import parser
 from parser import InstructionParser, Instruction
 
-sys.path.append("life_range")
 from life_range import analyse_live_ranges, get_interaction_ranges, InteractionType
-
 
 operand_colors = [
     "#FE8386",

@@ -2,7 +2,9 @@ import subprocess
 from enum import Enum
 import os
 import tempfile
+import sys
 
+sys.path.append("cubin")
 import cubin
 
 
