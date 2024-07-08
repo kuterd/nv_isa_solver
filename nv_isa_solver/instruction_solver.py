@@ -145,9 +145,9 @@ class EncodingRanges:
         operand_flags={},
         predicate=7,
         stall_cycles=15,
-        yield_flag=True,
-        read_barrier=7,
-        write_barrier=7,
+        yield_flag=False,
+        read_barrier=0,
+        write_barrier=0,
         barrier_mask=0,
     ) -> bytearray:
         result = bytearray(b"\0" * 16)
