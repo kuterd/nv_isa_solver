@@ -10,6 +10,7 @@ setup(
             "nv-isa-solver = nv_isa_solver.instruction_solver:main",
             "nv-isa-solver-scan = nv_isa_solver.scan_disasm:main",
             "nv-isa-solver-mutate = nv_isa_solver.mutate_opcodes:main",
+            "nv-isa-solver-populate-cache = nv_isa_solver.populate_cache:main",
         ],
     },
     author="Kuter Dinel",

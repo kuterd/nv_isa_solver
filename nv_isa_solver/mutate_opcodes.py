@@ -4,7 +4,6 @@ Simple utility to mutate known opcodes with known rest of instructions.
 
 from .disasm_utils import Disassembler
 
-import argparse
 from argparse import ArgumentParser
 
 
@@ -13,7 +12,6 @@ def main():
     arg_parser.add_argument("--arch", default="SM90a")
     arg_parser.add_argument("--cache_file", default="disasm_cache.txt")
     arg_parser.add_argument("--nvdisasm", default="nvdisasm")
-    arg_parser.add_argument("file", type=argparse.FileType("r"))
 
     arguments = arg_parser.parse_args()
 

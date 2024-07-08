@@ -17,8 +17,7 @@ def main():
 
     inst = []
     for i in range(pow(2, 12)):
-        # Read write barriers!
-        array = bytearray(bytes.fromhex("00000000000000000000000000e00f00"))
+        array = bytearray(b"\0" * 16)
         set_bit_range(array, 0, 12, i)
         inst.append(array)
         for j in range(13, 8 * 13):
