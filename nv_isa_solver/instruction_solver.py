@@ -5,6 +5,7 @@ from collections import Counter
 from concurrent import futures
 from argparse import ArgumentParser
 import traceback
+import os
 
 from .disasm_utils import Disassembler, set_bit_range, get_bit_range
 from . import table_utils
@@ -1556,6 +1557,8 @@ def main():
         if spec.parsed.base_name not in base_names:
             base_names[spec.parsed.base_name] = []
         base_names[spec.parsed.base_name].append(spec)
+
+    os.makedirs("output", exist_ok=True)
 
     for base in base_names:
         result = INSTRUCTION_DESC_HEADER + table_utils.INSTVIZ_HEADER
