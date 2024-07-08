@@ -1185,7 +1185,8 @@ class InstructionSpec:
             score = sum(counts.values()) - sum(_counts.values())
             return score
 
-        modi_values = {}
+        used_modis = set()
+        modi_values = [0] * len(self.modifiers)
         change = True
         while len(counts) != 0 and change:
             change = False
@@ -1194,7 +1195,7 @@ class InstructionSpec:
             best_modi_group = None
             best_match = 0
             for modifier_group, i, value in self.all_modifiers:
-                if i in modi_values:
+                if i in used_modis:
                     continue
                 modifier_group = [
                     operand
@@ -1210,6 +1211,7 @@ class InstructionSpec:
             if best_match != 0:
                 change = True
                 modi_values[best_i] = best_value
+                used_modis.add(best_i)
                 for modifier in best_modi_group:
                     counts[modifier] -= 1
                     counter_remove_zeros(counts)
