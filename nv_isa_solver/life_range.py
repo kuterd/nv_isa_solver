@@ -130,7 +130,7 @@ def get_live_ranges(filename, nvdisasm="nvdisasm"):
     return _process_range_output(result), result
 
 
-def analyse_live_ranges(inst, archCode=90):
+def analyse_live_ranges(inst, archCode=90, nvdisasm="nvdisasm"):
     bin = cubin.Cubin(arch=archCode)
     const_dict = {"name_list": [], "size_list": []}
 
@@ -150,6 +150,6 @@ def analyse_live_ranges(inst, archCode=90):
 
     bin.Write(tmp.name)
 
-    result = get_live_ranges(tmp.name)
+    result = get_live_ranges(tmp.name, nvdisasm)
     os.remove(tmp.name)
     return result

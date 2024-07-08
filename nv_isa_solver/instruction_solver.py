@@ -428,7 +428,7 @@ def analyse_modifiers(original: List[str], mutated: List[str]):
 
 
 class InstructionMutationSet:
-    def __init__(self, inst: bytes | bytearray, disasm: str, mutations, disassembler):
+    def __init__(self, inst, disasm: str, mutations, disassembler):
         self.inst = inst
         self.disasm = disasm
         self.parsed = InstructionParser.parseInstruction(self.disasm)
@@ -1329,7 +1329,7 @@ class InstructionSpec:
             barrier_mask=barrier_mask,
         )
 
-    def analyse_operand_interactions(self, arch_code):
+    def analyse_operand_interactions(self, arch_code, nvdisasm):
         try:
             reg_files, encoded = self.encode_for_life_range(
                 self.get_minimal_modifiers()
@@ -1337,7 +1337,7 @@ class InstructionSpec:
             if encoded is None:
                 return
             interaction_data, self.operand_interaction_raw = analyse_live_ranges(
-                encoded, arch_code
+                encoded, arch_code, nvdisasm=nvdisasm
             )
             interaction_ranges = get_interaction_ranges(interaction_data)
         except Exception as e:
@@ -1441,7 +1441,7 @@ def instruction_analysis_pipeline(inst, disassembler, arch_code):
     spec = InstructionSpec(
         asm, parsed_inst, ranges, modifier_values, operand_modifier_values
     )
-    spec.analyse_operand_interactions(arch_code)
+    spec.analyse_operand_interactions(arch_code, disassembler.nvdisasm)
     return spec
 
 
