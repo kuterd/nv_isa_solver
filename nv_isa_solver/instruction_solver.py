@@ -1329,7 +1329,7 @@ class InstructionSpec:
             barrier_mask=barrier_mask,
         )
 
-    def analyse_operand_interactions(self):
+    def analyse_operand_interactions(self, arch_code):
         try:
             reg_files, encoded = self.encode_for_life_range(
                 self.get_minimal_modifiers()
@@ -1337,7 +1337,7 @@ class InstructionSpec:
             if encoded is None:
                 return
             interaction_data, self.operand_interaction_raw = analyse_live_ranges(
-                encoded
+                encoded, arch_code
             )
             interaction_ranges = get_interaction_ranges(interaction_data)
         except Exception as e:
@@ -1420,7 +1420,7 @@ def analysis_run_fixedpoint(
         change = fn(disassembler, mset)
 
 
-def instruction_analysis_pipeline(inst, disassembler):
+def instruction_analysis_pipeline(inst, disassembler, arch_code):
     inst = disassembler.distill_instruction(inst)
     asm = disassembler.disassemble(inst)
 
@@ -1441,7 +1441,7 @@ def instruction_analysis_pipeline(inst, disassembler):
     spec = InstructionSpec(
         asm, parsed_inst, ranges, modifier_values, operand_modifier_values
     )
-    spec.analyse_operand_interactions()
+    spec.analyse_operand_interactions(arch_code)
     return spec
 
 
@@ -1498,6 +1498,9 @@ class ISASpec:
 def main():
     arg_parser = ArgumentParser()
     arg_parser.add_argument("--arch", default="SM90a")
+    arg_parser.add_argument(
+        "--arch_code", default=90
+    )  # is this even correct for SM90a?
     arg_parser.add_argument("--cache_file", default="disasm_cache.txt")
     arg_parser.add_argument("--nvdisasm", default="nvdisasm")
     arg_parser.add_argument("--num_parallel", default=4, type=int)
@@ -1529,7 +1532,10 @@ def main():
             instruction_futures = {}
             for key, inst in instructions:
                 future = executor.submit(
-                    instruction_analysis_pipeline, inst, disassembler
+                    instruction_analysis_pipeline,
+                    inst,
+                    disassembler,
+                    arguments.arch_code,
                 )
                 instruction_futures[key] = future
 
