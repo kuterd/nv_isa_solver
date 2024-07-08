@@ -1499,7 +1499,7 @@ def main():
     arg_parser = ArgumentParser()
     arg_parser.add_argument("--arch", default="SM90a")
     arg_parser.add_argument(
-        "--arch_code", default=90
+        "--arch_code", default=90, type=int
     )  # is this even correct for SM90a?
     arg_parser.add_argument("--cache_file", default="disasm_cache.txt")
     arg_parser.add_argument("--nvdisasm", default="nvdisasm")
