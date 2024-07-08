@@ -2,10 +2,8 @@ import subprocess
 from enum import Enum
 import os
 import tempfile
-import sys
 
-sys.path.append("cubin")
-import cubin
+from .cubin import cubin
 
 
 class InteractionType(str, Enum):
@@ -122,9 +120,13 @@ def get_interaction_ranges(reg_interactions):
 
 
 def get_live_ranges(filename, nvdisasm="nvdisasm"):
-    result = subprocess.run(
+    proc = subprocess.run(
         [nvdisasm, filename, "--print-life-ranges"], capture_output=True
-    ).stdout.decode("ascii")
+    )
+    error = proc.stderr.decode("ascii")
+    if len(error) != 0:
+        print("Nvdisasm error!", error)
+    result = proc.stdout.decode("ascii")
     return _process_range_output(result), result
 
 

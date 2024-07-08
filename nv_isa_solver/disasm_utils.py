@@ -1,9 +1,10 @@
 import subprocess
 import tempfile
 import tqdm
-from parser import InstructionParser
 import os
 import multiprocessing
+
+from .parser import InstructionParser
 
 
 def _process_dump(dump):

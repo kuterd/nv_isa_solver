@@ -6,12 +6,11 @@ from concurrent import futures
 from argparse import ArgumentParser
 import traceback
 
-from disasm_utils import Disassembler, set_bit_range, get_bit_range
-import table_utils
-import parser
-from parser import InstructionParser, Instruction
-
-from life_range import analyse_live_ranges, get_interaction_ranges, InteractionType
+from .disasm_utils import Disassembler, set_bit_range, get_bit_range
+from . import table_utils
+from . import parser
+from .parser import InstructionParser, Instruction
+from .life_range import analyse_live_ranges, get_interaction_ranges, InteractionType
 
 operand_colors = [
     "#FE8386",
@@ -1292,7 +1291,9 @@ class InstructionSpec:
             "UPRED": upredicates,
             "UGPR": uregisters,
         }
-        encoded = self.ranges.encode(operand_values, modifiers)
+        encoded = self.ranges.encode(
+            operand_values, modifiers, yield_flag=False, read_barrier=0, write_barrier=0
+        )
         return (reg_files, encoded)
 
     def encode(
@@ -1490,7 +1491,7 @@ class ISASpec:
         return best
 
 
-if __name__ == "__main__":
+def main():
     arg_parser = ArgumentParser()
     arg_parser.add_argument("--arch", default="SM90a")
     arg_parser.add_argument("--cache_file", default="disasm_cache.txt")
@@ -1560,3 +1561,7 @@ if __name__ == "__main__":
 
         file.write(result)
     disassembler.dump_cache(arguments.cache_file)
+
+
+if __name__ == "__main__":
+    main()

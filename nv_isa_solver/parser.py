@@ -603,6 +603,7 @@ class _InstructionParser:
                 "MEXITED",
                 "TRA_RETURN_MASK",
                 "CUBE",
+                "OPT_STACK",
             ]
             or op.startswith("???")
             or op.startswith("INVALID")

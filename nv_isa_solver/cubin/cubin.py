@@ -1,6 +1,6 @@
 # Taken from turingas by Yan Da (daadaada)
 
-from ELF import *
+from .ELF import *
 from struct import unpack, pack
 from functools import reduce
 
