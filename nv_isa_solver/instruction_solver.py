@@ -1464,7 +1464,7 @@ class ISASpec:
         with open(filename) as file:
             return ISASpec.from_json(file.read())
 
-    def find_instruction(self, target_key, signature=[], modifiers=[]):
+    def find_instruction(self, target_key, modifiers=[]):
         """
         Find best instruction spec best matching the modifiers.
         """
@@ -1476,6 +1476,7 @@ class ISASpec:
             signature_key = inst.parsed.get_key()
             if signature_key != target_key:
                 continue
+
             _modifiers = Counter(modifiers)
             match = True
 
@@ -1486,6 +1487,7 @@ class ISASpec:
                     break
             if not match:
                 continue
+
             new_score = sum(modifiers.values()) - sum(_modifiers.values())
             if new_score > score:
                 best = inst

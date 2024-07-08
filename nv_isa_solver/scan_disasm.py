@@ -5,7 +5,7 @@ Scan a dissassembly file to add to the corpus.
 """
 
 from .parser import InstructionParser
-from .disasm_utils import Disassembler
+from .disasm_utils import Disassembler, get_bit_range
 
 import argparse
 from argparse import ArgumentParser
@@ -24,29 +24,19 @@ def main():
     disassembler.load_cache(arguments.cache_file)
 
     instructions = disassembler.find_uniques_from_cache()
-    instruction_keys = set()
-
-    for inst, disasm in disassembler.cache.items():
-        if disasm == "":
-            continue
-        try:
-            key = InstructionParser.parseInstruction(disasm[:-1]).get_key()
-        except Exception:
-            print("Couldn't parse", disasm)
-            continue
-        instruction_keys.add(key)
-
     uncached = set()
 
-    def process_instruction(inst):
+    def process_instruction(disasm, instbytes):
         try:
-            parsed = InstructionParser.parseInstruction(inst)
+            parsed = InstructionParser.parseInstruction(disasm)
         except Exception:
             print("Couldn't parse", inst)
             return False
-        if parsed.get_key() not in instruction_keys:
-            instruction_keys.add(parsed.get_key())
-            uncached.add(parsed.get_key())
+        opcode = get_bit_range(instbytes, 0, 12)
+        key = f"{opcode}.{parsed.get_key()}"
+        if key not in instructions:
+            instructions[key] = instbytes
+            uncached.add(key)
             return True
         return False
 
@@ -60,7 +50,6 @@ def main():
         return bytes.fromhex(reverse_(first[2:]) + reverse_(second[2:]))
 
     prev = None
-    dumps = []
     asm = None
     for i, line in enumerate(arguments.file):
         line = line.strip()
@@ -80,12 +69,11 @@ def main():
             asm = new_asm
             continue
 
-        if process_instruction(asm):
+        inst = to_bytes(prev, line_dump)
+        if process_instruction(asm, inst):
             print("Distilling", asm)
-            inst = to_bytes(prev, line_dump)
             disassembler.distill_instruction(inst)
 
-    print(uncached)
     print("Found", len(uncached), "instructions")
 
     disassembler.dump_cache(arguments.cache_file)
