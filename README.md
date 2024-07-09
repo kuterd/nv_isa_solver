@@ -1,7 +1,8 @@
 # Nvidia Instruction Set Specification Generator
 This is a project for automatically generating instruction set specifications for NVIDIA GPUs by fuzzing the nvdisasm program included in Cuda
 
-Human readable ISA Spec for SM90a is [here](https://kuterdinel.com/nv_isa/).
+Human readable ISA Spec for SM90a (Hopper) is [here](https://kuterdinel.com/nv_isa/).
+Human readable ISA Spec for SM89 (RTX4090) is [here](https://kuterdinel.com/nv_isa_sm89/).
 
 ## Credits
 - Original parser based on [CuAssembler](https://github.com/cloudcores/CuAssembler) by cloudcores
